@@ -16,6 +16,16 @@ const saveTarget = {
   capabilities: ["edit", "manage"] as const,
   safeForRetry: false,
 };
+const editSession = { policy: "edit" as const, sessionId: "test-session", scope: "unit test" };
+function hostPolicyFor(policy: "inspect" | "edit" | "auto") {
+  return async (required: "edit" | "auto") => {
+    const rank = { inspect: 0, edit: 1, auto: 2 };
+    if (rank[policy] < rank[required]) {
+      throw Object.assign(new Error("Host policy does not authorize this operation."), { code: "CIVIL3D.HOST_POLICY_REQUIRED" });
+    }
+    return { ...editSession, policy };
+  };
+}
 
 describe("approval policy", () => {
   it("requires approval for non-retryable drawing mutations but not safe queries", () => {
@@ -31,7 +41,7 @@ describe("approval policy", () => {
   it("binds a single-use token to exact parameters and drawing identity", async () => {
     let drawing = "drawing-a";
     let now = 10_000;
-    const policy = new ApprovalPolicyService(async () => drawing, () => now);
+    const policy = new ApprovalPolicyService(async () => drawing, () => now, hostPolicyFor("edit"));
     const parameters = { action: "save", saveAs: "C:/work/design.dwg" };
     const receipt = await policy.requestApproval(saveTarget, parameters, 30_000);
 
@@ -59,7 +69,7 @@ describe("approval policy", () => {
   });
 
   it("rejects protected execution that has no approval token", async () => {
-    const policy = new ApprovalPolicyService(async () => "drawing-a");
+    const policy = new ApprovalPolicyService(async () => "drawing-a", undefined, hostPolicyFor("edit"));
     await expect(policy.enforce(saveTarget, { action: "save" })).rejects.toBeInstanceOf(ApprovalRequiredError);
   });
 
@@ -67,7 +77,7 @@ describe("approval policy", () => {
     const noDrawing = Object.assign(new Error("No active drawing is open in Civil 3D."), {
       code: "CIVIL3D.NO_DRAWING",
     });
-    const policy = new ApprovalPolicyService(async () => { throw noDrawing; });
+    const policy = new ApprovalPolicyService(async () => { throw noDrawing; }, undefined, hostPolicyFor("edit"));
     const target = {
       toolName: "civil3d_drawing",
       action: "new",
@@ -81,5 +91,19 @@ describe("approval policy", () => {
     expect(receipt.drawingFingerprint).toBe("no-active-drawing");
     await expect(policy.enforce(target, { ...parameters, approvalToken: receipt.approvalToken }))
       .resolves.toBeUndefined();
+  });
+
+  it("refuses to issue approval under Inspect policy", async () => {
+    const policy = new ApprovalPolicyService(async () => "drawing-a", undefined, hostPolicyFor("inspect"));
+    await expect(policy.requestApproval(saveTarget, { action: "save" }))
+      .rejects.toMatchObject({ code: "CIVIL3D.HOST_POLICY_REQUIRED" });
+  });
+
+  it("uses Auto policy as the host authorization without requiring a per-call token", async () => {
+    const scriptTarget = { ...saveTarget, toolName: "civil3d_scripting", action: "script_run" };
+    const policy = new ApprovalPolicyService(async () => "drawing-a", undefined, hostPolicyFor("auto"));
+    await expect(policy.enforce(scriptTarget, { action: "script_run", name: "safe_script" })).resolves.toBeUndefined();
+    await expect(policy.requestApproval(scriptTarget, { action: "script_run", name: "safe_script" }))
+      .rejects.toMatchObject({ code: "CIVIL3D.INVALID_INPUT" });
   });
 });

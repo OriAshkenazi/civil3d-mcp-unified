@@ -14,7 +14,9 @@ describe("P2 security boundaries", () => {
     const violations: string[] = [];
 
     for (const fileName of readdirSync(pluginDirectory).filter((name) => name.endsWith(".cs"))) {
-      if (fileName === "FileBoundary.cs" || fileName === "PluginLog.cs") continue;
+      // HostSessionDescriptor is the narrowly scoped exception: it must create a current-user-only
+      // authentication descriptor at a fixed LocalAppData path, not an artifact under user-selected roots.
+      if (fileName === "FileBoundary.cs" || fileName === "PluginLog.cs" || fileName === "HostSessionDescriptor.cs") continue;
       const source = readFileSync(`${pluginDirectory}/${fileName}`, "utf8");
       source.split(/\r?\n/).forEach((line, index) => {
         if (directWritePattern.test(line)) violations.push(`${fileName}:${index + 1}`);
@@ -22,6 +24,15 @@ describe("P2 security boundaries", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("restricts the native host-session descriptor write to its fixed current-user location", () => {
+    const source = readFileSync(`${pluginDirectory}/HostSessionDescriptor.cs`, "utf8");
+    expect(source).toContain("Environment.SpecialFolder.LocalApplicationData");
+    expect(source).toContain("FileMode.CreateNew");
+    expect(source).toContain("FileAttributes.ReparsePoint");
+    expect(source).toContain("FileSystemAccessRule(owner, FileSystemRights.FullControl");
+    expect(source).toContain("FileShare.Read");
   });
 
   it("canonicalizes paths, enforces roots and extensions, and writes by atomic move", () => {

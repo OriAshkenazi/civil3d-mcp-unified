@@ -13,6 +13,11 @@ parameters: []
 
 - The user must turn the AI connection on in Civil 3D (ribbon **Civil 3D MCP → AI Connection**, or `C3DMCPSTART`).
   If tools report that Civil 3D can't be reached, ask them to turn it on rather than retrying.
+- The session starts in Inspect. The user can choose Edit or Auto locally with `C3DMCPAUTHORIZE`;
+  never try to elevate policy through a tool call. Auto permits trusted scripts and commands without per-call prompts.
+  `C3DMCPREVOKE` returns to Inspect; `C3DMCPSTOP` ends the authenticated connection.
+- Arbitrary C# requires Auto, including `civil3d_query`. Query rollback protects the model transaction only,
+  not files, processes or network side effects. Filters and cooperative timeouts are not an OS sandbox.
 - You act on the drawing that is active in that Civil 3D window. Confirm which drawing it is (`civil3d_health` or a
   `civil3d_query` returning `Document.Name`) before changing anything, and say which drawing you're about to change.
 - Check `civil3d_preferences action=list` and follow the user's standing rules, and the good practices
@@ -37,16 +42,16 @@ parameters: []
 1. A dedicated `civil3d_*` tool, if one fits.
 2. A saved script (`civil3d_script action=list`), ready to run.
 3. A skill (`civil3d_skills action=search`): a proven recipe to adapt.
-4. Only then write new C#, starting read-only with `civil3d_query`.
+4. Only then write new C#, starting with model rollback through `civil3d_query` in an authorized Auto session.
 
 Lessons related to the API you use are returned with `civil3d_execute`/`civil3d_query` results (`relatedLessons`).
 Read them: they are mistakes someone already made.
 
 ## Changing a drawing
 
-- Look first: run the read-only version (`civil3d_query`, or a script's `dryRun: true`) and report what would change.
+- Look first: use a typed inspection tool or model-rollback query (`civil3d_query` in Auto) and report what would change.
 - Each `civil3d_execute` run is one undo step (`UNDO 1` reverts it), runs in one transaction, and rolls back
-  completely if it throws. Keep runs focused so undo stays meaningful.
+  model changes if it throws. External side effects are not rolled back. Keep runs focused so undo stays meaningful.
 - Never move, explode or edit COGO points, survey figures or other survey data unless the user explicitly asks.
   Point labels can be moved without touching the point.
 - Points from a file come in only through Civil 3D's own importer: `civil3d_point` `import_file` (`list_formats` for

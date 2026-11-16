@@ -58,6 +58,16 @@ if (process.argv.includes("--prebuilt")) {
   if (info.sourceHash !== await pluginSourceHash()) {
     throw new Error("prebuilt plugin doesn't match the plugin source. Run npm run plugin:prebuild and commit it.");
   }
+  // This detects payload changes after a controlled build. It is a build record,
+  // not an independent attestation that arbitrary upstream binaries match source.
+  const payloadFiles = (await readdir(prebuilt)).filter((file) => /\.(dll|pdb|json)$/i.test(file) && file !== "BUILD-INFO.json");
+  if (!info.binaryHashes || payloadFiles.some((file) => typeof info.binaryHashes[file] !== "string")) {
+    throw new Error("Prebuilt binary hashes are missing. Rebuild this fork from reviewed source.");
+  }
+  for (const file of payloadFiles) {
+    const hash = createHash("sha256").update(await readFile(path.join(prebuilt, file))).digest("hex");
+    if (hash !== info.binaryHashes[file]) throw new Error(`Prebuilt binary hash mismatch: ${file}`);
+  }
   await cp(prebuilt, pluginBuild, { recursive: true });
 } else {
   run("dotnet", ["build", path.join("Civil3D-MCP-Plugin", "Civil3DMcpPlugin.csproj"), "-c", "Release", "-o", pluginBuild, "--no-incremental", "-v:minimal"]);

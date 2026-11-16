@@ -28,7 +28,10 @@ async function main() {
   // Temp files a crashed or killed write left in the knowledge folders (older than an hour).
   sweepKnowledgeTemporaryFiles();
   await registerTools(server);
-  const httpServer = startHttpBridge();
+  const httpServer = process.env.MCP_HTTP_ENABLED?.toLowerCase() === "true"
+    ? startHttpBridge()
+    : undefined;
+  if (!httpServer) log.info("HTTP MCP bridge is disabled");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -44,7 +47,8 @@ async function main() {
 
     try {
       await new Promise<void>((resolve) => {
-        httpServer.close(() => resolve());
+        if (httpServer) httpServer.close(() => resolve());
+        else resolve();
         // Stop accepting new connections but don't let lingering sockets block exit.
         setTimeout(() => resolve(), 2000).unref();
       });

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.5.1-security.1 (fork preview)
+
+- Replace the plugin TCP listener with a current-user named pipe and per-session credentials.
+- Enforce locally granted Inspect/Edit/Auto policy in the plugin, including queued work and background jobs; revocation changes the authorization generation.
+- Keep all typed tools, arbitrary C#, raw commands and saved scripts. Arbitrary code is privileged, including model-rollback queries.
+- Disable HTTP by default and require a token when enabled; require a live host grant for Node-owned state changes.
+- Add native authorization and named-pipe regressions, update deployment guidance, and record rebuilt binary digests.
+- This preview has offline/build validation; live Civil 3D validation is a separate deployment gate.
+
+
 ## v2.5.0 — 2026-11-12
 
 v2.4.1 (below) was never released on its own; this release includes it.

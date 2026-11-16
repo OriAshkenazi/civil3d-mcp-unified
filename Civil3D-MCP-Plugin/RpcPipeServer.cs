@@ -1,51 +1,36 @@
-// RpcTcpServer.cs - the plugin end of the wire between the TypeScript MCP server (src/utils/SocketClient.ts) and
-// Civil 3D. PluginRuntime.StartServer creates it on C3DMCPSTART (or the ribbon toggle) with
-// PluginRuntime.HandleRawRequestAsync as the handler; that handler parses the JSON-RPC envelope and calls
-// CommandDispatcher, whose handlers queue their drawing work on the one serialized host gate (CivilExecution).
-// Rules it keeps: loopback 127.0.0.1 only and an exclusive port (one Civil 3D window at a time); exactly one JSON-RPC
-// request per TCP connection, read within 30 s, at most 1 MiB, strict UTF-8; a client that disconnects cancels its
-// request so queued work never starts. It never touches a drawing itself.
-using System.Net;
-using System.Net.Sockets;
+// Authenticated current-user named pipe transport.
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 
 namespace Civil3DMcpPlugin;
 
-/// <summary>
-/// The plugin's TCP listener for the TypeScript server. It binds to 127.0.0.1 only, with an exclusive port, so
-/// nothing off this PC can connect and only one Civil 3D window can have the AI connection on. The protocol is one
-/// JSON-RPC request per connection: the client writes one JSON object (at most 1 MiB, within 30 s, strict UTF-8),
-/// the server answers and closes. While the request runs, the connection is watched, and if the client goes away
-/// the request's cancellation token is cancelled, so queued work never starts (work already running finishes).
-/// </summary>
-public sealed class RpcTcpServer
+/// <summary>One authenticated request per current-user named-pipe connection.</summary>
+public sealed class RpcPipeServer
 {
   private const int MaxRequestBytes = 1024 * 1024;
   private static readonly TimeSpan RequestReadTimeout = TimeSpan.FromSeconds(30);
 
-  private readonly int _port;
+  private readonly string _pipeName;
   private readonly Func<string, CancellationToken, Task<string>> _handler;
   private readonly CancellationTokenSource _cts = new();
-  private TcpListener? _listener;
+  private NamedPipeServerStream? _listener;
   private Task? _acceptLoop;
 
   /// <summary>Creates the listener without binding it; <see cref="Start"/> binds.</summary>
-  /// <param name="port">TCP port on 127.0.0.1 (8080 by default, set by PluginRuntime).</param>
+  /// <param name="pipeName">Random per-session pipe name.</param>
   /// <param name="handler">Takes the raw request text and a cancellation token, returns the serialized JSON-RPC
   /// response (PluginRuntime.HandleRawRequestAsync).</param>
-  public RpcTcpServer(int port, Func<string, CancellationToken, Task<string>> handler)
+  public RpcPipeServer(string pipeName, Func<string, CancellationToken, Task<string>> handler)
   {
-    _port = port;
+    _pipeName = pipeName;
     _handler = handler;
   }
 
-  /// <summary>Binds and starts accepting; throws when the port is taken (another Civil 3D window has it).</summary>
+  /// <summary>Creates a current-user-only pipe and starts accepting.</summary>
   public void Start()
   {
-    // Exclusive: no other process (or second Civil 3D window) can bind or share this port while we hold it.
-    _listener = new TcpListener(IPAddress.Loopback, _port) { ExclusiveAddressUse = true };
-    _listener.Start();
+    _listener = CreatePipe();
     _acceptLoop = Task.Run(AcceptLoopAsync, _cts.Token);
   }
 
@@ -55,13 +40,17 @@ public sealed class RpcTcpServer
     try
     {
       _cts.Cancel();
-      _listener?.Stop();
+      _listener?.Dispose();
       _acceptLoop?.Wait(TimeSpan.FromSeconds(1));
     }
     catch
     {
     }
   }
+
+  private NamedPipeServerStream CreatePipe() => new(_pipeName, PipeDirection.InOut,
+    NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
+    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 
   /// <summary>Accepts connections until stopped and hands each one to its own <see cref="ProcessClientAsync"/> task.
   /// Requests are not serialized here: ordering and one-at-a-time drawing access come from the host gate
@@ -70,31 +59,29 @@ public sealed class RpcTcpServer
   {
     while (!_cts.IsCancellationRequested)
     {
-      TcpClient? client = null;
+      NamedPipeServerStream? client = null;
       try
       {
-        client = await _listener!.AcceptTcpClientAsync(_cts.Token);
-        _ = Task.Run(() => ProcessClientAsync(client, _cts.Token), _cts.Token);
+        client = _listener ?? CreatePipe();
+        _listener = client;
+        await client.WaitForConnectionAsync(_cts.Token);
+        _listener = null;
+        _ = Task.Run(() => ProcessClientAsync(client, _cts.Token));
       }
-      catch (OperationCanceledException)
-      {
-        break;
-      }
-      catch
-      {
-        client?.Dispose();
-      }
+      catch (OperationCanceledException) { client?.Dispose(); break; }
+      catch (ObjectDisposedException) when (_cts.IsCancellationRequested) { break; }
+      catch { client?.Dispose(); if (!_cts.IsCancellationRequested) await Task.Delay(100); }
+
     }
   }
 
   /// <summary>Reads one request, runs the handler while watching for disconnect, and writes the answer unless the
   /// client has left. Errors are logged; a malformed request gets a JSON-RPC error, never an exception.</summary>
-  private async Task ProcessClientAsync(TcpClient client, CancellationToken cancellationToken)
+  private async Task ProcessClientAsync(NamedPipeServerStream client, CancellationToken cancellationToken)
   {
     try
     {
-      using (client)
-      await using (var stream = client.GetStream())
+      await using (var stream = client)
       {
         string request;
         try
@@ -104,7 +91,7 @@ public sealed class RpcTcpServer
         catch (DecoderFallbackException)
         {
           // Reject instead of silently replacing bytes with U+FFFD (e.g. a Windows-1252 degree sign).
-          PluginLog.Warn("RpcTcpServer", "Rejected a request that is not valid UTF-8.");
+          PluginLog.Warn("RpcPipeServer", "Rejected a request that is not valid UTF-8.");
           var error = JsonRpcProtocol.SerializeError(
             null,
             -32700,
@@ -132,7 +119,7 @@ public sealed class RpcTcpServer
         var clientDisconnected = await disconnectMonitor;
         if (clientDisconnected)
         {
-          PluginLog.Debug("RpcTcpServer", "Skipped response write because the client disconnected.");
+          PluginLog.Debug("RpcPipeServer", "Skipped response write because the client disconnected.");
           return;
         }
 
@@ -147,19 +134,19 @@ public sealed class RpcTcpServer
     }
     catch (TimeoutException)
     {
-      PluginLog.Warn("RpcTcpServer", $"Closed a client that did not send a complete request within {RequestReadTimeout.TotalSeconds:0} seconds.");
+      PluginLog.Warn("RpcPipeServer", $"Closed a client that did not send a complete request within {RequestReadTimeout.TotalSeconds:0} seconds.");
     }
     catch (OperationCanceledException)
     {
-      PluginLog.Debug("RpcTcpServer", "Client disconnected and its queued request was cancelled.");
+      PluginLog.Debug("RpcPipeServer", "Client disconnected and its queued request was cancelled.");
     }
     catch (InvalidDataException ex)
     {
-      PluginLog.Warn("RpcTcpServer", ex.Message);
+      PluginLog.Warn("RpcPipeServer", ex.Message);
     }
     catch (Exception ex)
     {
-      PluginLog.Error("RpcTcpServer", "Client request processing failed.", ex);
+      PluginLog.Error("RpcPipeServer", "Client request processing failed.", ex);
     }
   }
 
@@ -171,7 +158,7 @@ public sealed class RpcTcpServer
   /// client doesn't close its side until it has the answer). Over the size limit is InvalidDataException; no complete
   /// request within the read timeout is TimeoutException.
   /// </summary>
-  private static async Task<string> ReadSingleJsonObjectAsync(NetworkStream stream, CancellationToken cancellationToken)
+  private static async Task<string> ReadSingleJsonObjectAsync(Stream stream, CancellationToken cancellationToken)
   {
     var buffer = new byte[8192];
     using var requestBuffer = new MemoryStream();
@@ -222,7 +209,7 @@ public sealed class RpcTcpServer
   /// <summary>Watches the connection during a request; on end of stream or a socket error it cancels the request and
   /// returns true (the response is then not written).</summary>
   private static async Task<bool> MonitorClientDisconnectAsync(
-    NetworkStream stream,
+    Stream stream,
     CancellationTokenSource requestCancellation,
     CancellationToken monitorCancellation)
   {
@@ -247,11 +234,6 @@ public sealed class RpcTcpServer
       return false;
     }
     catch (IOException)
-    {
-      requestCancellation.Cancel();
-      return true;
-    }
-    catch (SocketException)
     {
       requestCancellation.Cancel();
       return true;

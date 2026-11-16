@@ -44,7 +44,7 @@ interface BridgeHandle {
 
 /** Starts the bridge on a free local port with the given options and returns its base URL and a stop function. */
 async function launchBridge(options: Parameters<typeof startHttpBridge>[0] = {}): Promise<BridgeHandle> {
-  const server = startHttpBridge({ port: 0, host: "127.0.0.1", ...options });
+  const server = startHttpBridge({ port: 0, host: "127.0.0.1", authToken: "secret-token", ...options });
 
   await new Promise<void>((resolve, reject) => {
     server.once("listening", () => resolve());
@@ -71,11 +71,14 @@ interface BridgeResponse {
 async function request(
   method: "GET" | "POST" | "OPTIONS",
   url: string,
-  init: { headers?: Record<string, string>; body?: string } = {},
+  init: { headers?: Record<string, string>; body?: string; auth?: false } = {},
 ): Promise<BridgeResponse> {
+  const headers = init.auth === false
+    ? init.headers
+    : { Authorization: "Bearer secret-token", ...init.headers };
   const response = await fetch(url, {
     method,
-    headers: init.headers,
+    headers,
     body: init.body,
   });
 
@@ -129,7 +132,7 @@ describe("httpBridge", () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
         bridge: "ok",
-        versions: { application: "2.5.0", mcpSdk: expect.any(String), node: expect.any(String) },
+        versions: { application: expect.any(String), mcpSdk: expect.any(String), node: expect.any(String) },
       });
       expect(executeOrchestratorMock).not.toHaveBeenCalled();
     });
@@ -399,7 +402,7 @@ describe("httpBridge", () => {
       const controller = new AbortController();
       const pending = fetch(`${handle.baseUrl}/execute`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Connection: "close" },
+        headers: { "Content-Type": "application/json", Connection: "close", Authorization: "Bearer secret-token" },
         body: JSON.stringify({ tool: "civil3d_health", parameters: {} }),
         signal: controller.signal,
       });
@@ -410,9 +413,11 @@ describe("httpBridge", () => {
     });
   });
 
-  // Non-loopback binds must be refused unless a token and a Host allowlist are set; the token may come in two headers.
+  // Every enabled bridge requires a token, including loopback; non-loopback binds also need a Host allowlist.
   describe("authorization", () => {
-    it("refuses a non-loopback bind without authentication", () => {
+    it("refuses to start without authentication, including on loopback", () => {
+      expect(() => startHttpBridge({ host: "127.0.0.1", port: 0, authToken: "" }))
+        .toThrow(/MCP_HTTP_TOKEN is required/i);
       expect(() => startHttpBridge({ host: "0.0.0.0", port: 0, authToken: "" }))
         .toThrow(/MCP_HTTP_TOKEN is required/i);
     });
@@ -458,7 +463,7 @@ describe("httpBridge", () => {
     it("rejects requests missing the token with 401", async () => {
       handle = await launchBridge({ authToken: "secret-token" });
 
-      const res = await request("GET", `${handle.baseUrl}/tools`);
+      const res = await request("GET", `${handle.baseUrl}/tools`, { auth: false });
 
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ error: { code: "CIVIL3D.AUTH_REQUIRED", message: "Unauthorized" } });
@@ -475,14 +480,6 @@ describe("httpBridge", () => {
       expect(res.body).toEqual({ error: { code: "CIVIL3D.AUTH_REQUIRED", message: "Unauthorized" } });
     });
 
-    it("does not enforce auth when authToken is empty (default dev mode)", async () => {
-      listRegisteredToolNamesMock.mockReturnValue([]);
-      handle = await launchBridge({ authToken: "" });
-
-      const res = await request("GET", `${handle.baseUrl}/tools`);
-
-      expect(res.status).toBe(200);
-    });
   });
 
   describe("CORS preflight", () => {
@@ -513,7 +510,7 @@ describe("httpBridge", () => {
       handle = await launchBridge({ allowedOrigins: ["https://trusted.example"] });
 
       const response = await fetch(`${handle.baseUrl}/tools`, {
-        headers: { Origin: "https://trusted.example" },
+        headers: { Origin: "https://trusted.example", Authorization: "Bearer secret-token" },
       });
 
       expect(response.status).toBe(200);
@@ -543,8 +540,8 @@ describe("httpBridge", () => {
     });
 
     it("rejects wildcard Host and Origin configuration", () => {
-      expect(() => startHttpBridge({ port: 0, allowedHosts: ["*"] })).toThrow(/Wildcard/i);
-      expect(() => startHttpBridge({ port: 0, allowedOrigins: ["*"] })).toThrow(/Wildcard/i);
+      expect(() => startHttpBridge({ port: 0, authToken: "secret-token", allowedHosts: ["*"] })).toThrow(/Wildcard/i);
+      expect(() => startHttpBridge({ port: 0, authToken: "secret-token", allowedOrigins: ["*"] })).toThrow(/Wildcard/i);
     });
   });
 

@@ -1,5 +1,15 @@
 {
-  "version": "2.5.0",
-  "sourceHash": "f7d16e1249ecf88ae5b2b8dcb84a7d5ad7f00ce2755b106b94448b1f089ee114",
+  "version": "2.5.1-security.1",
+  "sourceHash": "455726819a8dfd4e8fb6da317fd87b201faa2b32e372e609c49f74d027eba03d",
+  "binaryHashes": {
+    "Civil3DMcpPlugin.deps.json": "bebd132fc3894ae86300d5e7c90db18d628f0a32f3d4403710cb88efff201979",
+    "Civil3DMcpPlugin.dll": "c70cf0734e81c77ff56aecd5079e90ac4c748c954cc3a03713c78efe29242754",
+    "Civil3DMcpPlugin.pdb": "bcb942b36d1e5bdcde36111aae9d1498e41aad71751ca40052a13fcaa5cb11ab",
+    "Civil3DMcpPlugin.runtimeconfig.json": "3f19960640b09e27b0e2ded565702d2989b632068244d352621118fe3771201f",
+    "Microsoft.CodeAnalysis.CSharp.dll": "36f5ac8da30a6107f53a2ca6509b61e284c08eb59aa1b22956d4e200e4514aa5",
+    "Microsoft.CodeAnalysis.CSharp.Scripting.dll": "8bf735bc74be05075368547e58c3a6be59d7a20dcf0a6dd05997ac94c401e4ee",
+    "Microsoft.CodeAnalysis.dll": "10f489db67b8ac7489e58d392166c928302ba5698506dd652311da5d89f0a0f8",
+    "Microsoft.CodeAnalysis.Scripting.dll": "abe6f2dcf2d1d2e0b9094dda38342aea2d3307d032054b35645d112117c40766"
+  },
   "note": "Built locally against Civil 3D 2027 by npm run plugin:prebuild. Autodesk assemblies are not included."
 }

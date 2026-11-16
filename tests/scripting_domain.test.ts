@@ -1,8 +1,14 @@
 // Guards the knowledge and scripting tools (src/tools/domains/scriptingDomain.ts, knowledgeBase.ts, skillsLibrary.ts,
 // src/serverInstructions.ts): skills/preferences/lessons rules, which scripting actions need approval, and that
-// civil3d_execute is blocked without approval before it reaches the plugin. Uses temporary know-how folders; no Civil 3D.
+// host-only scripting requires Auto authorization before it reaches the plugin. Uses temporary know-how folders; no Civil 3D.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../src/utils/hostSession.js", () => ({
+  requireHostPolicy: async (required: "edit" | "auto") => {
+    if (required === "auto") throw new Error("Civil 3D host policy is edit; this action requires auto.");
+    return { policy: "edit", sessionId: "test-session", scope: "test" };
+  },
+}));
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerTools } from "../src/tools/register.js";
 import { getToolHandler } from "../src/tools/toolHandlerRegistry.js";
@@ -206,14 +212,14 @@ describe("scripting domain", () => {
     expect(names).toEqual(["civil3d_execute", "civil3d_query", "acad_command", "civil3d_skills", "civil3d_preferences", "civil3d_memory", "civil3d_project_notes", "civil3d_practices", "civil3d_script"]);
   });
 
-  it("gates drawing and file mutations behind approval but not read-only work", () => {
+  it("treats arbitrary C# as privileged while retaining approval checks for ordinary mutations", () => {
     expect(riskFor("execute")).toBe(true);
     expect(riskFor("command")).toBe(true);
     expect(riskFor("script_save")).toBe(true);
     expect(riskFor("script_run")).toBe(true);
     expect(riskFor("script_delete")).toBe(true);
 
-    expect(riskFor("query")).toBe(false);
+    expect(riskFor("query")).toBe(true);
     expect(riskFor("compile")).toBe(false);
     expect(riskFor("status")).toBe(false);
     expect(riskFor("script_list")).toBe(false);
@@ -231,7 +237,7 @@ describe("scripting domain", () => {
     expect(skills.resolveAction({ action: "read", skillName: "list_surfaces" }).action).toBe("skills_read");
   });
 
-  it("blocks an unapproved civil3d_execute before it reaches the plugin", async () => {
+  it("blocks civil3d_execute when the host session has not granted Auto policy", async () => {
     const server = new McpServer({ name: "scripting-approval", version: "test" });
     await registerTools(server);
 
@@ -240,7 +246,8 @@ describe("scripting domain", () => {
     const result = await handler!({ code: "return 1;" });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Approval required");
+    expect(result.content[0].text).toContain("host policy is edit");
+    expect(result.content[0].text).toContain("requires auto");
   });
 
   it("rejects malformed saved-script parameters before contacting the plugin", async () => {

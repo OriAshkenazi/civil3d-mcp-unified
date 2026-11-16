@@ -12,12 +12,13 @@ be open with `Civil3DMcpPlugin.dll` loaded separately:
 1. Build or download the native plugin.
 2. In Civil 3D, run `NETLOAD` and select `Civil3DMcpPlugin.dll`.
 3. Add the DLL to the `APPLOAD` Startup Suite if it should load automatically.
-4. Keep the default plugin port at `8080`, or enter the configured port while
-   installing the extension.
+4. Run `C3DMCPSTART`. The extension discovers the current-user named pipe automatically.
+5. Choose Edit or Auto locally with `C3DMCPAUTHORIZE` when needed. C#, saved scripts and commands remain available in Auto.
+6. If several Civil 3D instances are connected, enter the intended process ID in extension settings.
 
-The Node.js server also starts its loopback HTTP bridge on port `3000` by
-default. If another process already owns that port, choose a different HTTP
-bridge port in the extension settings.
+The HTTP bridge is off by default. Enable it only when needed and configure a long random token.
+Every HTTP client must present the token. The native plugin has no TCP listener.
+Arbitrary C# runs with the Windows user's privileges; model rollback is not OS isolation.
 
 ## Local Autodesk help
 

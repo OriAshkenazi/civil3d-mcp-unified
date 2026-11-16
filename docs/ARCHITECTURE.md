@@ -1,5 +1,7 @@
 # How Civil 3D MCP works inside
 
+> Security fork preview: the original transport/approval narrative below is superseded where it differs from [SECURITY-MODEL.md](SECURITY-MODEL.md). Production transport uses an authenticated current-user named pipe, not TCP. HTTP is disabled by default and requires a token when enabled. Native Inspect/Edit/Auto policy is the authority; compatibility approval tokens cannot grant it. C# and raw commands remain available in Auto. Native integration in Civil 3D must be validated before project deployment.
+
 This is the map for someone about to change the code. What the tools do for users is in the
 [README](../README.md); how to check a change and the repository's rules are in [CLAUDE.md](../CLAUDE.md).
 

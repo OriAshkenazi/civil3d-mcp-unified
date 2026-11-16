@@ -1,6 +1,6 @@
 // The "Civil 3D MCP" ribbon tab: the user's on/off switch for the AI connection and a status light.
 // Built by PluginEntry.Initialize; the toggle calls PluginEntry.ToggleConnection (the same TurnOn/TurnOff as
-// C3DMCPSTART/C3DMCPSTOP, which start or stop PluginRuntime's TCP listener) and Details calls PluginEntry.ShowStatus.
+// C3DMCPSTART/C3DMCPSTOP, which start or stop PluginRuntime's named-pipe listener) and Details calls PluginEntry.ShowStatus.
 // PluginEntry calls Refresh after every change so the button and the light match PluginRuntime.GetStatus().
 // The ribbon is optional: if it can't be built the commands still work, and a warning goes to PluginLog.
 // No drawing access; runs on the main (UI) thread only.
@@ -65,7 +65,7 @@ internal static class McpRibbon
     _toggle.IsChecked = running;
     _toggle.Text = running ? "AI Connection: ON" : "AI Connection: OFF";
     _toggle.ToolTip = running
-      ? $"AI assistants can work in this Civil 3D session (port {PluginRuntime.Port}). Click to turn off."
+      ? "AI assistants can connect to this Civil 3D session by named pipe. Click to turn off."
       : "AI assistants can't reach this Civil 3D session. Click to turn on.";
     _status.Text = running ? "Running" : "Off";
     _status.Image = running ? OnDot.Value : OffDot.Value;

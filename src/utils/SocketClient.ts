@@ -1,13 +1,10 @@
 /**
- * The TCP client for the Civil 3D plugin: one JSON-RPC 2.0 request over one connection to the plugin's loopback
- * listener (RpcTcpServer.cs, port 8080 by default), then the plugin's single JSON answer. ConnectionManager.ts makes
- * one ApplicationClientConnection per call (`withApplicationConnection`), wires the caller's abort signal to
- * `cancel`, and disconnects afterwards; domain actions only ever see `sendCommand`.
+ * One-request JSON-RPC client. Production callers provide a named-pipe path and session credentials; the legacy
+ * host/port constructor remains only for isolated socket-client compatibility tests. Authentication is sent in the
+ * top-level request envelope and never logged. ConnectionManager owns production descriptor discovery and cancellation.
  *
- * A JSON-RPC error answer becomes a Civil3DRpcError carrying the plugin's domain code (`error.data.code`, such as
- * CIVIL3D.OBJECT_NOT_FOUND) and the numeric code; domainRuntime.ts and the HTTP bridge read both. Connection
- * failures, timeouts and malformed answers are plain Errors. This file only moves bytes: what a method may do to the
- * drawing is decided by the plugin (CivilExecution) and, before the call, by approvalPolicy.ts.
+ * A JSON-RPC error answer becomes a Civil3DRpcError carrying the plugin domain code and numeric code. Connection
+ * failures, timeouts, and malformed answers are plain Errors. Host authorization is checked natively before dispatch.
  */
 import * as net from "net";
 import { StringDecoder } from "string_decoder";
@@ -73,6 +70,8 @@ export class Civil3DRpcError extends Error {
 export class ApplicationClientConnection {
   host: string;
   port: number;
+  private readonly auth?: { sessionId: string; token: string };
+  private readonly isPipe: boolean;
   socket: net.Socket;
   isConnected: boolean = false;
   responseCallbacks: Map<string, PendingRequest> = new Map();
@@ -83,9 +82,11 @@ export class ApplicationClientConnection {
   // in a large answer isn't turned into replacement characters.
   private decoder = new StringDecoder("utf8");
 
-  constructor(host: string, port: number) {
+  constructor(host: string, port?: number, auth?: { sessionId: string; token: string }) {
     this.host = host;
-    this.port = port;
+    this.port = port ?? 0;
+    this.auth = auth;
+    this.isPipe = port === undefined;
     this.socket = new net.Socket();
     this.setupSocketListeners();
   }
@@ -162,7 +163,8 @@ export class ApplicationClientConnection {
     }
 
     try {
-      this.socket.connect(this.port, this.host);
+      if (this.isPipe) this.socket.connect(this.host);
+      else this.socket.connect(this.port, this.host);
       return true;
     } catch (error) {
       log.error("Failed to connect", { host: this.host, port: this.port, error: String(error) });
@@ -235,6 +237,7 @@ export class ApplicationClientConnection {
         method: command,
         params,
         id: requestId,
+        ...(this.auth ? { auth: this.auth } : {}),
       };
 
       const timeoutMs = commandTimeoutMs(command);
