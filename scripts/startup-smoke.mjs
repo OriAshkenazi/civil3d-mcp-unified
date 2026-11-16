@@ -4,10 +4,12 @@
 //
 //   npm run test:startup   (builds first)    CI: node ./scripts/startup-smoke.mjs in .github/workflows/ci.yml
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 const port = process.env.MCP_HTTP_PORT ?? "31999";
+const token = randomBytes(32).toString("hex");
 const child = spawn(process.execPath, ["./build/index.js"], {
-  env: { ...process.env, MCP_HTTP_PORT: port, MCP_HTTP_HOST: "127.0.0.1" },
+  env: { ...process.env, MCP_HTTP_ENABLED: "true", MCP_HTTP_TOKEN: token, MCP_HTTP_PORT: port, MCP_HTTP_HOST: "127.0.0.1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";
@@ -19,9 +21,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
     try {
       response = await fetch(`http://127.0.0.1:${port}/health`, {
-        headers: process.env.MCP_HTTP_TOKEN
-          ? { Authorization: `Bearer ${process.env.MCP_HTTP_TOKEN}` }
-          : undefined,
+        headers: { Authorization: "Bearer " + token },
       });
       if (response.ok) break;
     } catch { /* server is still starting */ }

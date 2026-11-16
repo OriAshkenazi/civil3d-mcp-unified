@@ -1,10 +1,9 @@
-// Sends one JSON-RPC request straight to the plugin (bypasses the MCP server and approval flow).
+// Sends one authenticated JSON-RPC request straight to the plugin's named pipe.
 // Usage: node scripts/try-rpc.mjs <method> ['<json params>']
-// A developer's debugging aid, run by hand only: it talks to the plugin on CIVIL3D_HOST:CIVIL3D_PORT (default
-// 127.0.0.1:8080), so Civil 3D must be open with the AI connection on. Because it skips the MCP server, nothing asks
-// for approval: a write method changes the drawing at once (still one undo step, through the plugin's host gate).
+// A developer's debugging aid, run by hand only. It uses production discovery/authentication and the plugin's
+// Inspect/Edit/Auto policy. It cannot grant privileges; the user does that locally in Civil 3D.
 // Use read methods unless the drawing is disposable. Prints the first complete JSON response, then closes.
-import net from "node:net";
+import { withApplicationConnection } from "../build/utils/ConnectionManager.js";
 
 const [method, params = "{}"] = process.argv.slice(2);
 if (!method) {
@@ -12,21 +11,10 @@ if (!method) {
   process.exit(2);
 }
 
-const port = Number(process.env.CIVIL3D_PORT ?? 8080);
-const host = process.env.CIVIL3D_HOST ?? "127.0.0.1";
-const socket = net.connect(port, host, () =>
-  socket.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: JSON.parse(params) })));
-let data = "";
-socket.on("data", (chunk) => {
-  data += chunk;
-  try {
-    console.log(JSON.stringify(JSON.parse(data), null, 2));
-    socket.end();
-  } catch {
-    // Wait for the rest of the response.
-  }
-});
-socket.on("error", (error) => {
+try {
+  const result = await withApplicationConnection((client) => client.sendCommand(method, JSON.parse(params)));
+  console.log(JSON.stringify(result, null, 2));
+} catch (error) {
   console.error(error.message);
-  process.exit(1);
-});
+  process.exitCode = 1;
+}

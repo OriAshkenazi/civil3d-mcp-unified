@@ -1,5 +1,5 @@
 // The JSON-RPC method table: one switch from method name to the static handler in a *Commands.cs class.
-// Called by PluginRuntime.HandleRawRequestAsync for every request RpcTcpServer accepts; the names are the ones the
+// Called by PluginRuntime.HandleRawRequestAsync for every request RpcPipeServer accepts; the names are the ones the
 // TypeScript domains send with sendCommand and list in pluginMethods (src/tools/domains/*Domain.ts).
 // It does no drawing work itself: each handler goes through CivilExecution (or, for pure math, nothing).
 // Rules: one "name" => Handler(...) entry per line (tests/manifest_dispatcher_parity.test.ts parses this file); after
@@ -24,8 +24,10 @@ public static class CommandDispatcher
   /// </summary>
   public static Task<object?> DispatchAsync(string method, JsonObject? parameters, CancellationToken cancellationToken)
   {
+  PluginRuntime.EnsureAuthorized(method);
   return method switch
   {
+      "getHostSession" => Task.FromResult<object?>(PluginRuntime.GetHostSession()),
       "getCivil3DHealth" => DrawingCommands.GetCivil3DHealthAsync(),
       // Code execution, raw commands, and saved scripts (Roslyn)
       "executeCode" => ScriptCommands.ExecuteCodeAsync(parameters),

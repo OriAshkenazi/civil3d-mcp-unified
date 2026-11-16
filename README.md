@@ -1,3 +1,5 @@
+> **Security repair preview — v2.5.1-security.1:** this fork retains C#, raw commands and all typed tools, adds authenticated named pipes and local Inspect/Edit/Auto policy, and disables anonymous HTTP. Offline tests and a native build are validated separately below; live Civil 3D testing is still required before project use. See [the security model](docs/SECURITY-MODEL.md).
+
 <div align="center">
   <h1>Civil 3D MCP Unified</h1>
 
@@ -56,7 +58,7 @@ script** that it, or you through `MCPRUN`, can rerun later.
 ```text
 MCP client  <-- stdio ----------->  civil3d-mcp (Node.js)
 HTTP client <-- HTTP :3000 ------>  civil3d-mcp (Node.js)
-civil3d-mcp <-- JSON-RPC/TCP :8080 --> Civil3DMcpPlugin.dll --> Civil 3D 2027 API (+ Roslyn C#)
+civil3d-mcp <-- authenticated current-user named pipe --> Civil3DMcpPlugin.dll --> Civil 3D 2027 API (+ Roslyn C#)
 ```
 
 How the two halves work inside is in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md); the guide for changing the code
@@ -326,6 +328,7 @@ it on there.
 - **Ribbon:** the **Civil 3D MCP** tab has an **AI Connection: ON / OFF** toggle, and under it a status line
   with a green dot (**Running**) or red dot (**Off**). **Details** shows what it's doing.
 - **Commands:** `C3DMCPSTART` (on), `C3DMCPSTOP` (off), `C3DMCPSTATUS` (state).
+- **Authorization:** the session starts in **Inspect**. Run `C3DMCPAUTHORIZE` in Civil 3D and choose `inspect`, `edit`, or `auto` to grant the corresponding access. `edit` allows typed drawing writes; `auto` also enables arbitrary C# and raw AutoCAD commands. Run `C3DMCPREVOKE` to return to Inspect; `C3DMCPSTOP` closes the session and revokes its credentials.
 - Set `CIVIL3D_MCP_AUTOSTART=true` in the environment that launches Civil 3D to turn it on automatically
   whenever the plugin loads (the old behavior).
 - On the AI side, Claude Desktop extensions can be switched off in **Settings → Extensions**, and Claude Code
@@ -338,9 +341,8 @@ it on there.
 - **It acts on the active drawing** of the Civil 3D session that loaded the plugin.
   If you switch drawings while a request is queued, the request fails instead of
   writing to the wrong file.
-- **One Civil 3D window at a time.** The connection holds port 8080 exclusively. With several Civil 3D windows
-  open, only one can have it on; turning it on in another reports that the port is in use. Turn it off in the
-  first window, then on in the one you want (its status turns green).
+- **Choose the intended Civil 3D window.** Each active session publishes its own descriptor. If several Civil 3D
+  windows are active, set `CIVIL3D_INSTANCE_PID` on the Node server to the process you want to control.
 - **One change = one undo.** Each write from the AI (a fixed tool, `civil3d_execute`,
   or a saved script) is recorded as one undo group, so `UNDO 1` reverts exactly that change.
 - **Reads leave no trace.** Read-only requests run on Civil 3D's main thread
@@ -606,10 +608,10 @@ Approval requirements are identical for canonical and alias calls.
 flowchart LR
     Client["MCP Client\n(Claude / Cline / Cursor)"] <-->|"MCP stdio"| Server["civil3d-mcp\nNode.js"]
     HttpClient["Local HTTP Client"] -->|"HTTP :3000"| Server
-    Server <-->|"JSON-RPC/TCP :8080"| Plugin
+    Server <-->|"authenticated named pipe"| Plugin
 
     subgraph Civil3D ["Autodesk Civil 3D"]
-        Plugin["Civil3DMcpPlugin.dll\nTCP Listener"]
+        Plugin["Civil3DMcpPlugin.dll\nAuthenticated Named Pipe"]
         Queue["Bounded Host Queue"]
         Write["Writes: command context\n+ undo group + doc lock"]
         Read["Reads: main-thread dispatcher\n(no undo step, no lock)"]
@@ -744,12 +746,14 @@ AeccPressurePipesMgd.dll
 | **Manual (NETLOAD)** | Open Civil 3D → type `NETLOAD` → browse to `Civil3DMcpPlugin.dll` |
 
 Loading the plugin does **not** turn the AI connection on; use the ribbon toggle or `C3DMCPSTART`
-(or set `CIVIL3D_MCP_AUTOSTART=true`). These commands are available in the Civil 3D command line:
+(or set `CIVIL3D_MCP_AUTOSTART=true`). The session starts in Inspect policy. These commands are available in the Civil 3D command line:
 
 | Command | Description |
 |---|---|
-| `C3DMCPSTART` | Turn the AI connection on for this session (starts the JSON-RPC listener on port 8080) |
-| `C3DMCPSTOP` | Turn the AI connection off |
+| `C3DMCPSTART` | Turn the AI connection on for this session (creates a current-user named-pipe endpoint) |
+| `C3DMCPSTOP` | Turn the AI connection off and revoke the session |
+| `C3DMCPAUTHORIZE` | Grant `inspect`, `edit`, or `auto` policy locally in Civil 3D |
+| `C3DMCPREVOKE` | Return to `inspect` policy |
 | `C3DMCPSTATUS` | Show whether it's on, and what it's doing |
 | `C3DMCPFOLLOW` | Toggle whether the view moves to show AI changes (on by default) |
 | `MCPRUN` | Run a saved script by name, prompting for its parameters |
@@ -1277,9 +1281,9 @@ The Node MCP server reads the following variables at startup. All are optional; 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CIVIL3D_HOST` | `localhost` | Host the Civil 3D plugin's JSON-RPC TCP server binds to. |
-| `CIVIL3D_PORT` | `8080` | TCP port the MCP server connects to. The plugin always listens on 8080 (`PluginRuntime.Port`). |
-| `CIVIL3D_CONNECT_TIMEOUT` | `5000` | Milliseconds the server waits for a TCP connection to the plugin before giving up. |
+| `CIVIL3D_CONNECTION_DIR` | `%LOCALAPPDATA%\Civil3DMcp\connections` | Optional directory override for native host session discovery. |
+| `CIVIL3D_INSTANCE_PID` | Auto-select sole descriptor | Selects the intended Civil 3D process when multiple descriptors are present. |
+| `CIVIL3D_CONNECT_TIMEOUT` | `5000` | Milliseconds the server waits for a connection to the plugin before giving up. |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Milliseconds any single JSON-RPC command may run before the Node side rejects the call. Increase for heavy corridor rebuilds. |
 | `CIVIL3D_MAX_RESPONSE_BYTES` | `8388608` | Maximum buffered response size accepted from the Civil 3D plugin. |
 | `CIVIL3D_LOG_LEVEL` | `info` | One of `debug`, `info`, `warn`, `error`. Logs are written to stderr. |
@@ -1344,16 +1348,24 @@ Example calls:
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `MCP_HTTP_ENABLED` | `false` | Set to `true` to opt into starting the bridge. |
 | `MCP_HTTP_HOST` | `127.0.0.1` | Interface the HTTP bridge binds to. Keep this on loopback unless you know what you're doing. |
 | `MCP_HTTP_PORT` | `3000` | Port the HTTP bridge listens on. |
-| `MCP_HTTP_TOKEN` | *(unset)* | Optional shared secret. When set, every request to the bridge must include `Authorization: Bearer <token>` or `X-MCP-Token: <token>`. Leave unset to keep the loopback-only open mode. |
+| `MCP_HTTP_TOKEN` | *(unset)* | Required when the bridge is enabled. Every request must include `Authorization: Bearer <token>` or `X-MCP-Token: <token>`. |
 | `MCP_HTTP_MAX_BODY_BYTES` | `1048576` | Maximum accepted `POST /execute` body size in bytes. Requests exceeding this receive `413 Payload Too Large`. |
 | `MCP_HTTP_ALLOWED_ORIGINS` | *(unset)* | Comma-separated browser origins allowed to call the bridge. Requests without an `Origin` header, such as native clients, are unaffected. |
 | `MCP_HTTP_ALLOWED_HOSTS` | Loopback hostnames | Comma-separated HTTP `Host` names accepted by the bridge. Required with `MCP_HTTP_TOKEN` for non-loopback binds. Ports are ignored during comparison. |
 
-The bridge refuses to start on a non-loopback host unless `MCP_HTTP_TOKEN` is
-configured. Docker Compose also requires this token and publishes the bridge on
-the host loopback interface by default.
+The bridge is disabled unless `MCP_HTTP_ENABLED=true`, and refuses to start without
+`MCP_HTTP_TOKEN` even on loopback. Docker Compose also requires this token and
+publishes the bridge on the host loopback interface by default.
+
+The native plugin publishes a per-process descriptor in
+`%LOCALAPPDATA%\Civil3DMcp\connections\<pid>.json`. The Node server discovers the
+single live host by default; when multiple Civil 3D instances are present, set
+`CIVIL3D_INSTANCE_PID` to the intended process ID. Each JSON-RPC request carries
+session credentials. See [Security model](docs/SECURITY-MODEL.md) for the trust
+boundary and local authorization details.
 
 ### Plugin filesystem boundaries
 
@@ -1400,6 +1412,7 @@ failure cannot remain silent.
 
 ```powershell
 $env:MCP_HTTP_TOKEN = "change-me-to-a-long-random-string"
+$env:MCP_HTTP_ENABLED = "true"
 npm run start
 ```
 
@@ -1416,7 +1429,7 @@ Content-Type: application/json
 
 ### Verify the live Civil 3D plugin
 
-With Civil 3D open, a drawing active, and `C3DMCPSTATUS` reporting port 8080,
+With Civil 3D open, a drawing active, and `C3DMCPSTATUS` reporting an active host session,
 run this read-only P0 smoke check:
 
 ```powershell
@@ -1446,8 +1459,9 @@ characters). Identical calls share the in-flight or recent result for two
 minutes; reusing the key with different parameters returns `CIVIL3D.CONFLICT`.
 
 It calls `getCivil3DHealth` and retrieves drawing context without mutating the
-open drawing. Set `CIVIL3D_HOST` and `CIVIL3D_PORT` first if the plugin does not
-use the default loopback endpoint.
+open drawing. Start the host connection in Civil 3D first and authorize the
+requested access there. When multiple Civil 3D instances are open, select one
+with `CIVIL3D_INSTANCE_PID`.
 
 ---
 
@@ -1455,9 +1469,9 @@ use the default loopback endpoint.
 
 **"Cannot connect to Civil 3D plugin"**
 - Civil 3D must be open with a drawing loaded
-- Type `C3DMCPSTATUS` in Civil 3D — confirm the server shows as running on port 8080
-- Check Windows Firewall is not blocking `localhost:8080`
-- If you moved the plugin to a non-default port, set `CIVIL3D_PORT` on the Node side to match
+- Type `C3DMCPSTATUS` in Civil 3D — confirm the named-pipe session is active
+- Confirm the per-process descriptor exists under `%LOCALAPPDATA%\Civil3DMcp\connections`
+- If multiple Civil 3D sessions are running, set `CIVIL3D_INSTANCE_PID` to the intended process
 
 **"No active document"**
 - Open a `.dwg` file in Civil 3D before making any tool calls

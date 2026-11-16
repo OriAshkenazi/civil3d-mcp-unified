@@ -11,6 +11,9 @@ vi.mock("../src/utils/ConnectionManager.js", () => ({
   withApplicationConnection: async <T>(operation: (client: { sendCommand: typeof sendCommandMock }) => Promise<T>) =>
     await operation({ sendCommand: sendCommandMock }),
 }));
+vi.mock("../src/utils/hostSession.js", () => ({
+  requireHostPolicy: async () => ({ policy: "edit", sessionId: "approval-calls-test", scope: "unit test" }),
+}));
 
 import { isApprovalRequired } from "../src/tools/approvalPolicy.js";
 import { approvalTargetFor, captureDomainToolHandlers, type DomainToolDefinition } from "../src/tools/domainRuntime.js";

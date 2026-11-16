@@ -15,6 +15,12 @@ import { loadSkills } from "./tools/skillsLibrary.js";
  */
 export const SERVER_INSTRUCTIONS = [
   "Civil 3D MCP drives a live Autodesk Civil 3D drawing.",
+  "The plugin authenticates this Windows-user session and enforces its host policy. " +
+    "Only the person in Civil 3D can grant Edit or Auto with C3DMCPAUTHORIZE; never attempt to grant or expand your own permissions. " +
+    "C3DMCPREVOKE returns to inspection, and C3DMCPSTOP ends the connection. The grant covers drawings in that Civil 3D process.",
+  "Auto permits trusted arbitrary C#, saved scripts and raw commands without per-call approval tokens. " +
+    "All arbitrary C# is privileged, including civil3d_query: its model transaction is rolled back, but filesystem, network and process " +
+    "side effects are not. Code filters and timeouts are accident-prevention measures, not an operating-system sandbox.",
   "At the start of each chat, read the skill 'working_safely_in_civil3d' (civil3d_skills action=read).",
   "Before writing new C# for civil3d_execute or civil3d_query, check for an existing solution first: " +
     "civil3d_script action=list for ready-to-run saved scripts, and civil3d_skills action=search for proven, documented templates " +

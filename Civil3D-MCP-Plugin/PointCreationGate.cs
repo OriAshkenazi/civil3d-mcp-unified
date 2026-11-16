@@ -99,6 +99,9 @@ public static class PointCreationGate
         "civil3d_point action import_file (Civil 3D's own importer).");
     }
 
+    // A local Auto grant already authorizes trusted requests without per-call prompts.
+    if (PluginRuntime.IsTrustedRemoteRequest()) return;
+
     var allowed = await CivilExecution.OnMainThreadAsync(() => Task.FromResult(Ask(what, details, action)));
     if (!allowed)
     {

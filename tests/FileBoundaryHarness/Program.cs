@@ -1,14 +1,13 @@
 // Console test harness for the PLUGIN's file, JSON-RPC and host-guard rules (run: npm run test:p2-boundaries).
-// It compiles the plugin's real FileBoundary, SharedFolder, JsonRpcProtocol, JobRegistry, RpcTcpServer, PointText,
+// It compiles the plugin's real FileBoundary, SharedFolder, JsonRpcProtocol, JobRegistry, RpcPipeServer, PointText,
 // PipeMath, StationMath, SightMath, HostGuard, PointCreationRules and ScriptLoopGuard sources (see the .csproj), so it
 // needs no Civil 3D. Checks run top to bottom with Assert(); the first failure throws and the run exits non-zero.
-// Everything happens in a temporary folder and on a loopback TCP port; it deletes its folder at the end (finally).
+// Everything happens in a temporary folder and using uniquely named current-user pipes; it deletes its folder at the end (finally).
 // Windows paths are assumed (the shared folder and import/export roots are Windows paths).
 
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Net;
-using System.Net.Sockets;
+using System.IO.Pipes;
 using Civil3DMcpPlugin;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"civil3d-mcp-file-boundary-{Guid.NewGuid():N}");
@@ -199,10 +198,10 @@ try
   Assert(capacityRejected, "Job registry did not reject work at its bounded capacity.");
   Assert(JobRegistry.GetStats().Total <= stats.Capacity, "Job registry exceeded capacity under pressure.");
 
-  var disconnectPort = GetFreeTcpPort();
+  var disconnectPipe = NewPipeName();
   var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
   var handlerCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-  var rpcServer = new RpcTcpServer(disconnectPort, async (_, cancellationToken) =>
+  var rpcServer = new RpcPipeServer(disconnectPipe, async (_, cancellationToken) =>
   {
     handlerStarted.TrySetResult();
     try
@@ -219,10 +218,10 @@ try
   rpcServer.Start();
   try
   {
-    using var client = new TcpClient();
-    await client.ConnectAsync(IPAddress.Loopback, disconnectPort);
+    using var client = new NamedPipeClientStream(".", disconnectPipe, PipeDirection.InOut, PipeOptions.Asynchronous);
+    await client.ConnectAsync(3000);
     var requestBytes = Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"method\":\"wait\",\"id\":\"disconnect-test\"}");
-    await client.GetStream().WriteAsync(requestBytes);
+    await client.WriteAsync(requestBytes);
     await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
     client.Dispose();
     await handlerCancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -232,17 +231,17 @@ try
     rpcServer.Stop();
   }
 
-  var responsePort = GetFreeTcpPort();
-  var responseServer = new RpcTcpServer(responsePort, (_, _) => Task.FromResult("{\"ok\":true}"));
+  var responsePipe = NewPipeName();
+  var responseServer = new RpcPipeServer(responsePipe, (_, _) => Task.FromResult("{\"ok\":true}"));
   responseServer.Start();
   try
   {
-    using var responseClient = new TcpClient();
-    await responseClient.ConnectAsync(IPAddress.Loopback, responsePort);
+    using var responseClient = new NamedPipeClientStream(".", responsePipe, PipeDirection.InOut, PipeOptions.Asynchronous);
+    await responseClient.ConnectAsync(3000);
     var requestBytes = Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":\"response-test\"}");
-    await responseClient.GetStream().WriteAsync(requestBytes);
+    await responseClient.WriteAsync(requestBytes);
     var responseBuffer = new byte[128];
-    var responseLength = await responseClient.GetStream().ReadAsync(responseBuffer).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+    var responseLength = await responseClient.ReadAsync(responseBuffer).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
     Assert(Encoding.UTF8.GetString(responseBuffer, 0, responseLength) == "{\"ok\":true}", "RPC response path stalled while stopping the disconnect monitor.");
   }
   finally
@@ -251,21 +250,21 @@ try
   }
 
   // Non-UTF-8 bytes (a Windows-1252 degree sign) are rejected with a clear error instead of becoming U+FFFD.
-  var utf8Port = GetFreeTcpPort();
+  var utf8Pipe = NewPipeName();
   var handlerSawBadRequest = false;
-  var utf8Server = new RpcTcpServer(utf8Port, (request, _) => { handlerSawBadRequest = true; return Task.FromResult("{}"); });
+  var utf8Server = new RpcPipeServer(utf8Pipe, (request, _) => { handlerSawBadRequest = true; return Task.FromResult("{}"); });
   utf8Server.Start();
   try
   {
-    using var utf8Client = new TcpClient();
-    await utf8Client.ConnectAsync(IPAddress.Loopback, utf8Port);
+    using var utf8Client = new NamedPipeClientStream(".", utf8Pipe, PipeDirection.InOut, PipeOptions.Asynchronous);
+    await utf8Client.ConnectAsync(3000);
     var badBytes = Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"compileCode\",\"params\":{\"code\":\"return \\\"N89")
       .Concat(new byte[] { 0xB0 })
       .Concat(Encoding.UTF8.GetBytes("33\\\";\"}}"))
       .ToArray();
-    await utf8Client.GetStream().WriteAsync(badBytes);
+    await utf8Client.WriteAsync(badBytes);
     var buffer = new byte[1024];
-    var length = await utf8Client.GetStream().ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+    var length = await utf8Client.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
     var reply = Encoding.UTF8.GetString(buffer, 0, length);
     Assert(reply.Contains("not valid UTF-8") && reply.Contains("CIVIL3D.INVALID_REQUEST"), $"Invalid UTF-8 was not rejected clearly: {reply}");
     Assert(!handlerSawBadRequest, "A request with invalid UTF-8 reached the dispatcher.");
@@ -446,14 +445,7 @@ static void Assert(bool condition, string message)
   }
 }
 
-static int GetFreeTcpPort()
-{
-  var listener = new TcpListener(IPAddress.Loopback, 0);
-  listener.Start();
-  var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-  listener.Stop();
-  return port;
-}
+static string NewPipeName() => $"Civil3DMcp-harness-{Guid.NewGuid():N}";
 
 // Drawing units for K (SightMath), a caller's vertex list (StationMath.ReadVertices), the circular curve solve
 // (CurveMath) and the central meridian lookup (CoordinateParameterMatch): pure pieces of the profile, sight distance,

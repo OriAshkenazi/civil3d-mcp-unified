@@ -165,6 +165,7 @@ public static class CivilExecution
             return (false, default(T)!);
           }
 
+          PluginRuntime.RecheckHostAuthorization();
           return (true, await action());
         });
 
@@ -245,6 +246,7 @@ public static class CivilExecution
       started.TrySetResult(true);
       try
       {
+        PluginRuntime.RecheckHostAuthorization();
         completion.TrySetResult(await action());
       }
       catch (Exception ex)
@@ -313,6 +315,7 @@ public static class CivilExecution
       {
         try
         {
+          PluginRuntime.RecheckHostAuthorization();
           completion.TrySetResult(await action());
         }
         catch (Exception ex)
@@ -446,6 +449,7 @@ public static class CivilExecution
       started = true;
       PluginRuntime.StartHostOperation();
       cancellationToken.ThrowIfCancellationRequested();
+      PluginRuntime.RecheckHostAuthorization();
       return await action();
     }
     finally

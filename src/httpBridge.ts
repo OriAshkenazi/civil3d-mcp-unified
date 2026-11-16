@@ -114,9 +114,9 @@ function resolveConfig(options: HttpBridgeOptions = {}): ResolvedHttpBridgeConfi
       : parseAllowedHosts(process.env.MCP_HTTP_ALLOWED_HOSTS),
   };
 
-  if (!isLoopbackHost(config.host) && !config.authToken) {
+  if (!config.authToken) {
     throw new Error(
-      `MCP_HTTP_TOKEN is required when the HTTP bridge binds to non-loopback host '${config.host}'.`,
+      "MCP_HTTP_TOKEN is required whenever the HTTP bridge is enabled, including loopback binds.",
     );
   }
 
@@ -267,7 +267,8 @@ function writeError(
 function statusForDomainCode(code: string): number {
   if (code === "CIVIL3D.INVALID_JSON" || code === "CIVIL3D.INVALID_REQUEST" || code === "CIVIL3D.INVALID_INPUT") return 400;
   if (code === "CIVIL3D.AUTH_REQUIRED") return 401;
-  if (code === "CIVIL3D.FORBIDDEN" || code === "CIVIL3D.PATH_NOT_ALLOWED" || code === "CIVIL3D.FILE_TYPE_NOT_ALLOWED") return 403;
+  if (code === "CIVIL3D.FORBIDDEN" || code === "CIVIL3D.HOST_POLICY_REQUIRED"
+    || code === "CIVIL3D.PATH_NOT_ALLOWED" || code === "CIVIL3D.FILE_TYPE_NOT_ALLOWED") return 403;
   if (code === "CIVIL3D.OBJECT_NOT_FOUND" || code === "CIVIL3D.METHOD_NOT_FOUND") return 404;
   if (code === "CIVIL3D.CONFLICT" || code === "CIVIL3D.APPROVAL_REQUIRED" || code === "CIVIL3D.APPROVAL_INVALID") return 409;
   if (code === "CIVIL3D.CANCELLED") return 499;
@@ -553,7 +554,7 @@ export function startHttpBridge(options: HttpBridgeOptions = {}) {
         return;
       }
 
-      // Auth applies to every non-preflight route when MCP_HTTP_TOKEN is set.
+      // Auth applies to every non-preflight route; resolveConfig requires a token unconditionally.
       if (!isAuthorized(request, config.authToken)) {
         writeError(response, 401, "CIVIL3D.AUTH_REQUIRED", "Unauthorized");
         return;

@@ -136,6 +136,9 @@ public static class ScriptCommands
     var tokens = ParseCommandTokens(parameters);
     var commandName = tokens[0] as string ?? string.Empty;
     var normalized = commandName.TrimStart('_', '.', '-', '+').ToUpperInvariant();
+    if (tokens.OfType<string>().Any(token => System.Text.RegularExpressions.Regex.IsMatch(token,
+      @"(?i)(?<![A-Z0-9])C3DMCP(?:AUTHORIZE|REVOKE|START|STOP)(?![A-Z0-9])")))
+      throw new JsonRpcDispatchException("CIVIL3D.FORBIDDEN", "Host connection and authorization commands are local only.");
 
     if (ScriptSandbox.HostProtectionEnabled)
     {

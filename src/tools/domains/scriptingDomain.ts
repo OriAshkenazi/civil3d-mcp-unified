@@ -4,8 +4,8 @@
 // and the knowledge tools civil3d_skills, civil3d_preferences, civil3d_memory, civil3d_project_notes and
 // civil3d_practices, which work without the plugin (skillsLibrary.ts, knowledgeBase.ts, projectNotes.ts,
 // practices.ts; at most they ask it for the Civil 3D release through currentRelease, falling back when it is off).
-// Safety: execute, command, script_save/run/delete need an approvalToken (approvalPolicy.ts); query is read-only (the
-// plugin rolls it back). Knowledge writes are checked for job data before saving (generalKnowledge.ts: skills,
+// Safety: the plugin authorizes code and raw commands only in its locally granted Auto session;
+// queries roll back model transactions but remain privileged arbitrary code. Knowledge writes are checked for job data before saving (generalKnowledge.ts: skills,
 // preferences, lessons, scripts; practices via jobDataProblems), and the tool descriptions tell the AI to ask the user
 // first. civil3d_project_notes reads the suite's job database as reference only and writes only this tool's own rows
 // (tool = 'civil3d'); practices.json entries are changed only when source is "civil3d".
@@ -202,8 +202,7 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
   domain: "scripting",
   actions: {
     // Code execution (ScriptCommands.cs). execute (executeCode): C# with write access, one transaction and one undo
-    // step; create/edit and not retry-safe, so it needs approval. query (queryCode): the same engine, rolled back, no
-    // approval. Both add matching lessons and, once per session, a project overview (withLessons). compile
+    // step. query (queryCode) uses the same privileged engine with model rollback; both require Auto. Both add matching lessons and, once per session, a project overview (withLessons). compile
     // (compileCode) and status (getScriptingStatus) only inspect. command (runAcadCommand): an AutoCAD command line;
     // needs approval.
     execute: {
@@ -213,7 +212,9 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
     },
     query: {
       action: "query", inputSchema: QueryArgs, responseSchema: GenericResponseSchema,
-      capabilities: ["query", "analyze"], requiresActiveDrawing: true, safeForRetry: true, pluginMethods: ["queryCode"],
+      // Rollback protects the model transaction, not files, processes or other
+      // external effects. Arbitrary C# remains privileged in every run mode.
+      capabilities: ["edit", "analyze"], requiresActiveDrawing: true, safeForRetry: false, pluginMethods: ["queryCode"],
       execute: async (args) => withLessons(args.code as string, await sendCommand("queryCode", { code: args.code, args: args.args ?? {}, description: args.description ?? null })),
     },
     compile: {
@@ -442,8 +443,8 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
       execute: async (args) => removePractice(args.id as string),
     },
     // Saved scripts (ScriptCommands.cs, .csx files the plugin keeps). script_save checks the script for job data here
-    // (checkGeneral) before the plugin writes it, and needs approval ("save"). script_list / script_get read only.
-    // script_run (scriptRun) runs a saved script with write access and needs approval; script_delete (scriptDelete)
+    // (checkGeneral) before the plugin writes it, and needs host authorization. script_list / script_get inspect only.
+    // script_run (scriptRun) runs privileged saved code in an Auto session; script_delete (scriptDelete)
     // archives it and needs approval.
     script_save: {
       action: "script_save", inputSchema: ScriptSaveArgs, responseSchema: GenericResponseSchema,
@@ -484,7 +485,7 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
       description:
         "Runs C# code inside Civil 3D with WRITE access to the full AutoCAD and Civil 3D .NET API (Roslyn). " +
         "Use it for anything the dedicated civil3d_* tools do not cover. " + CHECK_EXISTING_FIRST + " The transaction commits on success and all changes form one undo step. " +
-        "Protected action: call civil3d_preview_action, then civil3d_request_approval, then retry with approvalToken. " +
+        "Requires the Auto session granted locally with C3DMCPAUTHORIZE. Auto needs no per-call approval token. " +
         "Inspect first with civil3d_query, and validate tricky code with civil3d_script action=compile. " +
         "If the task will repeat, save it with civil3d_script action=save. " + SCRIPT_GLOBALS_HELP,
       inputShape: {
@@ -499,8 +500,9 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
       toolName: "civil3d_query",
       displayName: "Civil 3D Query C#",
       description:
-        "Runs READ-ONLY C# code inside Civil 3D (transaction always rolled back; commands, saves, commits and file writes are blocked). " +
-        "No approval needed — use it freely to inspect drawings, find objects, and compute values. " + CHECK_EXISTING_FIRST + " " + SCRIPT_GLOBALS_HELP,
+        "Runs privileged C# with model-transaction rollback inside Civil 3D. Code filters try to prevent accidental writes, " +
+        "but do not isolate files, processes or network access. " +
+        "Requires the locally granted Auto session. Model changes roll back, but external side effects do not. " + CHECK_EXISTING_FIRST + " " + SCRIPT_GLOBALS_HELP,
       inputShape: {
         code: z.string().min(1).describe("C# script body. End with `return ...;`."),
         args: ScriptArgsSchema.optional().describe("Named inputs readable in code via Args."),
@@ -517,7 +519,7 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
         "[\"_.-LAYER\",\"_M\",\"C-ROAD\",\"\"] or [\"_.ZOOM\",\"_E\"] or [\"_.LINE\",{\"x\":0,\"y\":0},{\"x\":10,\"y\":5},\"\"]. " +
         "Use \"\" for Enter, '_.' prefixes for language-independent names, and dash-prefixed names (-LAYER, -PURGE) to avoid dialogs. " +
         "Command-line output is not captured; verify with civil3d_query. Prefer civil3d_execute for anything the API can do. " +
-        "Protected action (approval flow). Shell, NETLOAD, AutoLISP and similar commands are blocked.",
+        "Requires the locally granted Auto session. Shell, NETLOAD, AutoLISP and session-control commands remain blocked as accident-prevention guardrails.",
       inputShape: {
         command: CommandSchema.describe("Command name, or an array of command name followed by prompt responses (strings, numbers, booleans, or {x,y,z} points)."),
       },
@@ -701,7 +703,7 @@ export const SCRIPTING_DOMAIN_DEFINITION: DomainToolDefinition = {
         "status (scripts folder, sandbox, timeout). Save a script once a civil3d_execute/civil3d_query snippet works and the task is likely to recur; " +
         "search with action=list before writing new code. Users can also run saved scripts in Civil 3D by typing MCPRUN. " +
         "Nothing is lost: save with overwrite=true archives the previous version (scripts/_archive) and bumps its version, and delete " +
-        "retires the script to the archive. save, run and delete are protected actions (approval flow).",
+        "retires the script to the archive. Script execution requires the locally granted Auto session; saving or deleting scripts also requires host authorization.",
       inputShape: {
         action: z.enum(["save", "list", "get", "run", "delete", "compile", "status"]),
         name: z.string().optional(),

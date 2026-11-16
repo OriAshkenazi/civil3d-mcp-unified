@@ -36,8 +36,9 @@ The AI connection is **off** every time Civil 3D starts. AI assistants can only 
 Prefer the old behavior (on as soon as Civil 3D starts)? Set the Windows environment variable
 `CIVIL3D_MCP_AUTOSTART=true`.
 
-Only one Civil 3D window can have the connection on at a time (it uses port 8080). AI tools act on the drawing
-that is active in that window.
+Each connected Civil 3D process publishes its own authenticated current-user named pipe. If more than one is connected, set `CIVIL3D_INSTANCE_PID` in the MCP client to select the intended process. AI tools act on that process's active drawing.
+
+The session starts in Inspect. Use `C3DMCPAUTHORIZE` locally to choose Edit or Auto. Auto retains arbitrary C#, commands and saved scripts without per-call prompts. `C3DMCPREVOKE` removes elevated access. Arbitrary code is trusted in-process execution, not an OS sandbox.
 
 ## Uninstalling
 
@@ -56,7 +57,7 @@ now?"*. Answer **Y**, quit Claude Desktop when asked, and reopen it: the Civil 3
 backs up Claude's settings file before adding the one `civil3d-mcp` entry.
 
 **Claude Desktop (manual, no Node.js needed):** open **Settings → Extensions → Advanced settings → Install
-Extension**, select `civil3d-mcp-{{VERSION}}.mcpb`, and accept the defaults (host `localhost`, port `8080`).
+Extension**, select `civil3d-mcp-{{VERSION}}.mcpb`, and accept automatic named-pipe discovery (leave process ID blank for one connected instance).
 The extension runs on the Node.js built into Claude Desktop (Node 24 in current versions), which has everything the
 project notes need. If you turned off **Use Built-in Node.js for MCP** in Claude Desktop's extension settings, it
 uses the Node.js installed on your PC instead, which then has to be 22.15 or newer.
@@ -80,7 +81,7 @@ With a drawing open in Civil 3D, ask your AI app to run `civil3d_health`, or som
 
 ## Good to know
 
-- Changes that edit the drawing ask for approval first, and each one is a single `UNDO` step.
+- Host policy controls authorization. Auto sessions run trusted tasks without per-call token prompts. Typed changes retain their transaction/undo behavior; external script effects cannot be undone by drawing rollback.
 - The assistant learns as you work. With your OK it saves, under `Documents\Project Knowledge\civil3d`: your
   preferences and rules (`preferences.json`, loaded into every new chat), lessons about the Civil 3D API
   (`memory\lessons.jsonl`), skills (`skills\`) and scripts (`scripts\`, runnable in Civil 3D with `MCPRUN`). Nothing
@@ -97,5 +98,5 @@ With a drawing open in Civil 3D, ask your AI app to run `civil3d_health`, or som
   this version moves its own files into a `civil3d` subfolder. Once every suite tool you use is updated, you can
   close them and rename the folder to `Project Knowledge`; they find it there on their next start.
 - The plugin log is at `%LOCALAPPDATA%\Civil3DMcpPlugin\plugin.log`.
-- If you also `NETLOAD` the plugin from another folder, only one copy can use port 8080. Use one or the other.
+- Load only one plugin build into each Civil 3D process. HTTP is off by default; enabling it requires a token.
 - Full documentation: {{URL}}

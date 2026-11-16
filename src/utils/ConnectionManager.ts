@@ -1,18 +1,12 @@
-// The one way TypeScript code reaches the Civil 3D plugin: `withApplicationConnection(client => client.sendCommand(...))`.
-// Used by every domain action's execute, the orchestrator (ProjectContextService.ts), approvalPolicy.ts (the drawing
-// fingerprint), the knowledge tools (best-effort release/drawing lookups) and verify-live-plugin.mjs. Each
-// sendCommand opens its own TCP connection (SocketClient.ts) to CIVIL3D_HOST:CIVIL3D_PORT (default localhost:8080),
-// waits at most CIVIL3D_CONNECT_TIMEOUT ms (default 5000) to connect, sends one request and closes. The caller's abort
-// signal (requestContext.ts) destroys the socket and turns the failure into CIVIL3D.CANCELLED. No approval or
-// validation happens here: that is domainRuntime.ts's job before execute runs.
+// Production transport for commands to the native Civil 3D host: resolve one descriptor, open one authenticated
+// current-user named pipe, send one request, then disconnect. Descriptors are never cached between operations.
 import { ApplicationClientConnection, Civil3DRpcError } from "./SocketClient.js";
 import { createLogger } from "./logger.js";
 import { currentAbortSignal } from "./requestContext.js";
+import { discoverHostConnection } from "./connectionDiscovery.js";
 
 const log = createLogger("ConnectionManager");
 
-const CIVIL3D_HOST = process.env.CIVIL3D_HOST ?? "localhost";
-const CIVIL3D_PORT = parseInt(process.env.CIVIL3D_PORT ?? "8080", 10);
 const CONNECT_TIMEOUT_MS = parseInt(process.env.CIVIL3D_CONNECT_TIMEOUT ?? "5000", 10);
 
 /** What a domain action sees: send a plugin method (a CommandDispatcher.cs name) with params, get its `result`. */
@@ -21,10 +15,7 @@ export interface ApplicationCommandClient {
 }
 
 /**
- * Runs an operation against the Civil 3D plugin. The native transport accepts
- * exactly one JSON-RPC request per TCP connection, so every sendCommand call
- * receives its own short-lived connection. Composite domain actions may safely
- * issue several sequential commands through the client passed to operation.
+ * Runs an operation against the selected native host. Each sendCommand gets its own short-lived pipe connection.
  */
 export async function withApplicationConnection<T>(
   operation: (client: ApplicationCommandClient) => Promise<T>
@@ -43,8 +34,12 @@ export async function withApplicationConnection<T>(
  * aborted socket reported).
  */
 async function sendSingleCommand(command: string, params: unknown): Promise<any> {
-  const appClient = new ApplicationClientConnection(CIVIL3D_HOST, CIVIL3D_PORT);
   const signal = currentAbortSignal();
+  const descriptor = await discoverHostConnection();
+  const appClient = new ApplicationClientConnection("\\\\.\\pipe\\" + descriptor.pipeName, undefined, {
+    sessionId: descriptor.sessionId,
+    token: descriptor.token,
+  });
   const cancellationError = new Civil3DRpcError(
     `Civil 3D command '${command}' was cancelled by the caller.`,
     "CIVIL3D.CANCELLED",
@@ -81,11 +76,10 @@ async function sendSingleCommand(command: string, params: unknown): Promise<any>
           settled = true;
           cleanup();
           log.error("Connection failed", {
-            host: CIVIL3D_HOST,
-            port: CIVIL3D_PORT,
+            endpoint: "current-user named pipe",
             error: error.message,
           });
-          reject(new Error(`Failed to connect to Civil 3D plugin at ${CIVIL3D_HOST}:${CIVIL3D_PORT}`));
+          reject(new Error(`Failed to connect to the selected Civil 3D named pipe`));
         };
 
         appClient.socket.on("connect", onConnect);
@@ -98,7 +92,7 @@ async function sendSingleCommand(command: string, params: unknown): Promise<any>
           settled = true;
           cleanup();
           appClient.socket.destroy();
-          log.warn("Connection timed out", { host: CIVIL3D_HOST, port: CIVIL3D_PORT, timeoutMs: CONNECT_TIMEOUT_MS });
+          log.warn("Connection timed out", { endpoint: "current-user named pipe", timeoutMs: CONNECT_TIMEOUT_MS });
           reject(new Error(`Connection to Civil 3D plugin timed out after ${CONNECT_TIMEOUT_MS}ms`));
         }, CONNECT_TIMEOUT_MS);
 

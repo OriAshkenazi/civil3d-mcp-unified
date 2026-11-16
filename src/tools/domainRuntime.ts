@@ -21,6 +21,7 @@ import { maybeStoreReportResource } from "./reportResourceStore.js";
 import { idempotencyStore } from "./idempotencyStore.js";
 import { createLogger } from "../utils/logger.js";
 import { createRequestId, runWithRequestId } from "../utils/requestContext.js";
+import { requireHostPolicy } from "../utils/hostSession.js";
 import type { ToolCapability, ToolCatalogEntry, ToolDomain } from "./toolMetadata.js";
 
 type JsonObject = Record<string, unknown>;
@@ -269,6 +270,13 @@ async function executeExposure(
   }
 
   const executeOnce = async () => {
+    // Node-owned knowledge/files have no native handler on which to enforce policy.
+    // Require a live host grant before any such mutation, including retry-safe
+    // register actions; a request token is never a substitute for that grant.
+    const changesLocalState = (!actionDefinition.pluginMethods || actionDefinition.pluginMethods.length === 0)
+      && actionDefinition.capabilities.some((capability) => capability !== "generate" && MUTATING_CAPABILITIES.has(capability))
+      && actionDefinition.readOnlyWhen?.(parsedArgs as JsonObject) !== true;
+    if (changesLocalState) await requireHostPolicy("edit");
     // The decision uses the validated arguments (what execute will get); the token hash uses the raw ones.
     await approvalPolicy.enforce(approvalTargetFor(exposure.toolName, actionDefinition, parsedArgs as JsonObject), rawArgs);
     await emitProgress(
@@ -374,6 +382,9 @@ export function buildExposureAnnotations(
   const isReadOnly = actions.every((action) =>
     action.capabilities.every((capability) => !MUTATING_CAPABILITIES.has(capability))
   );
+  const privilegedCodeMethods = new Set(["executeCode", "queryCode", "compileCode", "runAcadCommand", "scriptRun"]);
+  const runsPrivilegedCode = actions.some((action) =>
+    action.pluginMethods?.some((method) => privilegedCodeMethods.has(method)) === true);
   const isDestructive = actions.some((action) => hasApprovalRisk({
     toolName: exposure.toolName,
     action: action.action,
@@ -383,10 +394,10 @@ export function buildExposureAnnotations(
 
   return {
     title: exposure.displayName,
-    readOnlyHint: isReadOnly,
-    destructiveHint: isDestructive,
-    idempotentHint: actions.length > 0 && actions.every((action) => action.safeForRetry),
-    openWorldHint: false,
+    readOnlyHint: isReadOnly && !runsPrivilegedCode,
+    destructiveHint: isDestructive || runsPrivilegedCode,
+    idempotentHint: !runsPrivilegedCode && actions.length > 0 && actions.every((action) => action.safeForRetry),
+    openWorldHint: runsPrivilegedCode,
   };
 }
 

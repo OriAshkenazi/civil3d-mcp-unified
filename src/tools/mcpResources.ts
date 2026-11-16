@@ -16,10 +16,13 @@ const SAFETY_GUIDANCE = `# Civil 3D MCP safety and execution
 
 All drawing work follows one authoritative path:
 
-MCP or HTTP caller -> schema validation -> approval policy -> host queue -> Civil 3D execution -> structured result
+Authenticated MCP client / opt-in authenticated HTTP -> schema validation -> authenticated named pipe -> plugin session policy -> host queue -> Civil 3D execution -> structured result
 
 - Query and inspection actions are read-only and retry-safe when their tool annotations say so.
-- Destructive or ambiguous actions require preview and a short-lived, drawing-bound approval token.
+- The user grants Inspect, Edit or Auto locally in Civil 3D with C3DMCPAUTHORIZE. Callers cannot elevate the host policy.
+- Auto preserves arbitrary C#, raw commands and typed tools without per-call prompts. Request tokens are compatibility/integrity aids, not human consent.
+- Arbitrary C# queries roll back the model transaction only. They require Auto and are not filesystem, network or process sandboxes.
+- C3DMCPREVOKE revokes elevated policy, and C3DMCPSTOP ends the authenticated session.
 - Drawing mutations execute in the Civil 3D host under command context, document lock, and a narrow transaction.
 - The Node MCP layer plans, validates, brokers, and reports results; it does not mutate drawings directly.
 `;

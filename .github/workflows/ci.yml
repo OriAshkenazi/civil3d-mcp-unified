@@ -32,3 +32,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet run --project ./tests/FileBoundaryHarness/FileBoundaryHarness.csproj
+
+  host-security:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+      - run: dotnet run --project ./tests/HostSecurityHarness/HostSecurityHarness.csproj

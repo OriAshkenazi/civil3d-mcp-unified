@@ -2,20 +2,20 @@
   "manifest_version": "0.3",
   "name": "civil3d-mcp",
   "display_name": "Civil 3D MCP",
-  "version": "2.5.0",
+  "version": "2.5.1-security.1",
   "description": "Connect Claude Desktop to a live Autodesk Civil 3D 2027 drawing, with live C# execution and saved scripts.",
-  "long_description": "Civil 3D MCP gives Claude Desktop a compact set of tools for inspecting and modifying a live Civil 3D drawing, including alignments, surfaces, corridors, profiles, pipe networks, grading, hydrology, plan production, and QC, plus live C# execution against the full AutoCAD and Civil 3D .NET API and reusable saved scripts. The native Civil3DMcpPlugin.dll must be loaded in Civil 3D before drawing tools can run. This build is the civil3d-mcp-unified fork of Sacred-G/Civil3D-mcp by Steven Bouldin, incorporating barbosaihan/civil3d-mcp (lisiting01); both MIT. Fork maintained by Michael Wachter.",
+  "long_description": "Civil 3D MCP gives Claude Desktop a compact set of tools for inspecting and modifying a live Civil 3D drawing, including alignments, surfaces, corridors, profiles, pipe networks, grading, hydrology, plan production, and QC, plus live C# execution against the full AutoCAD and Civil 3D .NET API and reusable saved scripts. The native Civil3DMcpPlugin.dll must be loaded in Civil 3D before drawing tools can run. This build is the civil3d-mcp-unified fork of Sacred-G/Civil3D-mcp by Steven Bouldin, incorporating barbosaihan/civil3d-mcp (lisiting01); both MIT. Fork maintained by Michael Wachter. Security repair preview by OriAshkenazi: authenticated current-user named pipes and locally granted Inspect/Edit/Auto policy. Live Civil 3D validation is required before project use.",
   "author": {
     "name": "Steven Bouldin",
     "url": "https://github.com/Sacred-G"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/michaelwachter20/civil3d-mcp-unified.git"
+    "url": "https://github.com/OriAshkenazi/civil3d-mcp-unified.git"
   },
-  "homepage": "https://github.com/michaelwachter20/civil3d-mcp-unified",
-  "documentation": "https://github.com/michaelwachter20/civil3d-mcp-unified/blob/main/docs/DEPLOYMENT.md",
-  "support": "https://github.com/michaelwachter20/civil3d-mcp-unified/issues",
+  "homepage": "https://github.com/OriAshkenazi/civil3d-mcp-unified",
+  "documentation": "https://github.com/OriAshkenazi/civil3d-mcp-unified/blob/codex/security-host-session/docs/DEPLOYMENT.md",
+  "support": "https://github.com/OriAshkenazi/civil3d-mcp-unified/issues",
   "server": {
     "type": "node",
     "entry_point": "server/index.js",
@@ -25,15 +25,16 @@
         "${__dirname}/server/index.js"
       ],
       "env": {
-        "CIVIL3D_HOST": "${user_config.civil3d_host}",
-        "CIVIL3D_PORT": "${user_config.civil3d_port}",
         "CIVIL3D_ENABLE_TOOL_ALIASES": "${user_config.enable_tool_aliases}",
         "CIVIL3D_HELP_ROOT": "${user_config.help_root}",
         "CIVIL3D_HELP_VERSION": "${user_config.help_version}",
         "CIVIL3D_ENABLE_HELP_REINDEX": "${user_config.enable_help_reindex}",
         "CIVIL3D_LOG_LEVEL": "${user_config.log_level}",
         "MCP_HTTP_HOST": "127.0.0.1",
-        "MCP_HTTP_PORT": "${user_config.http_port}"
+        "MCP_HTTP_PORT": "${user_config.http_port}",
+        "CIVIL3D_INSTANCE_PID": "${user_config.civil3d_instance_pid}",
+        "MCP_HTTP_ENABLED": "${user_config.enable_http_bridge}",
+        "MCP_HTTP_TOKEN": "${user_config.http_token}"
       }
     }
   },
@@ -73,22 +74,6 @@
     }
   },
   "user_config": {
-    "civil3d_host": {
-      "type": "string",
-      "title": "Civil 3D host",
-      "description": "Host running the native Civil 3D plugin.",
-      "default": "localhost",
-      "required": true
-    },
-    "civil3d_port": {
-      "type": "number",
-      "title": "Civil 3D plugin port",
-      "description": "JSON-RPC/TCP port exposed by Civil3DMcpPlugin.dll.",
-      "default": 8080,
-      "min": 1,
-      "max": 65535,
-      "required": true
-    },
     "enable_tool_aliases": {
       "type": "boolean",
       "title": "Expose all tool aliases",
@@ -127,11 +112,33 @@
     "http_port": {
       "type": "number",
       "title": "Local HTTP bridge port",
-      "description": "Loopback HTTP port for local clients. The default is 3000.",
+      "description": "Used only when the optional authenticated HTTP bridge is enabled.",
       "default": 3000,
       "min": 1,
       "max": 65535,
-      "required": true
+      "required": false
+    },
+    "civil3d_instance_pid": {
+      "type": "string",
+      "title": "Civil 3D process ID (optional)",
+      "description": "Leave blank for the sole live instance. Enter the intended process ID when several Civil 3D sessions have their connection enabled.",
+      "default": "",
+      "required": false
+    },
+    "enable_http_bridge": {
+      "type": "boolean",
+      "title": "Enable local HTTP bridge",
+      "description": "Optional additional interface. Off by default; requires an HTTP token when enabled.",
+      "default": false,
+      "required": false
+    },
+    "http_token": {
+      "type": "string",
+      "title": "HTTP bridge token",
+      "description": "Required only when the optional HTTP bridge is enabled. Use a long random secret.",
+      "sensitive": true,
+      "default": "",
+      "required": false
     }
   }
 }

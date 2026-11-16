@@ -66,8 +66,8 @@ npm run package:claude:validate
 1. Open **Settings > Extensions**.
 2. Open **Advanced settings** and select **Install Extension**.
 3. Select `civil3d-mcp-<version>.mcpb`.
-4. For a standard local setup, keep Civil 3D at `localhost:8080` and the HTTP
-   bridge at `127.0.0.1:3000`.
+4. For a standard local setup, start the host connection from Civil 3D and leave
+   the optional HTTP bridge disabled unless you need it.
 5. Open Civil 3D with `Civil3DMcpPlugin.dll` loaded, then ask Claude to run
    `civil3d_health`.
 
@@ -139,9 +139,10 @@ npm run claude:add
 node build/index.js
 ```
 
-The process reads from `stdin` and writes to `stdout` (MCP stdio transport). It
-also starts an HTTP bridge on `127.0.0.1:3000` for local HTTP clients. Node.js
-connects separately to the Civil 3D plugin's JSON-RPC TCP listener on port 8080.
+The process reads from `stdin` and writes to `stdout` (MCP stdio transport).
+The optional HTTP bridge is disabled unless `MCP_HTTP_ENABLED=true` and
+`MCP_HTTP_TOKEN` is configured. Node.js discovers the authenticated native
+named-pipe session descriptor published by Civil 3D.
 
 ---
 
@@ -250,8 +251,8 @@ All variables are optional; defaults work for a standard local setup.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CIVIL3D_HOST` | `localhost` | Host where Civil 3D plugin RPC server is listening |
-| `CIVIL3D_PORT` | `8080` | TCP port for the Civil 3D plugin RPC server |
+| `CIVIL3D_CONNECTION_DIR` | `%LOCALAPPDATA%\Civil3DMcp\connections` | Optional override for discovery of native host session descriptors; intended for tests or deliberate multi-instance setups. |
+| `CIVIL3D_INSTANCE_PID` | Auto-select sole descriptor | Selects the intended Civil 3D process when multiple descriptors exist. |
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | Connection timeout in milliseconds |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Timeout for individual command execution (ms) |
 | `CIVIL3D_MAX_RESPONSE_BYTES` | `8388608` | Maximum plugin response buffered by Node.js |
@@ -263,9 +264,10 @@ All variables are optional; defaults work for a standard local setup.
 | `CIVIL3D_ENABLE_HELP_REINDEX` | `false` | Allow the `civil3d_help` explicit `reindex` action |
 | `CIVIL3D_HELP_MAX_IMAGE_BYTES` | `6291456` | Maximum inline help-image bytes per topic response |
 | `CIVIL3D_VIDEO_CATALOG` | Bundled 2027 catalog | Optional refreshed Autodesk video-catalog JSON path |
+| `MCP_HTTP_ENABLED` | `false` | Set to `true` to opt into starting the local HTTP bridge. Disabled by default. |
 | `MCP_HTTP_PORT` | `3000` | HTTP bridge port for local HTTP clients |
 | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bridge bind address |
-| `MCP_HTTP_TOKEN` | *(unset)* | Shared secret required for non-loopback binds |
+| `MCP_HTTP_TOKEN` | *(unset)* | Required shared secret whenever the HTTP bridge is enabled; every request must include it. |
 | `MCP_HTTP_MAX_BODY_BYTES` | `1048576` | Maximum accepted `/execute` request body |
 | `MCP_HTTP_ALLOWED_HOSTS` | Loopback hostnames | Comma-separated accepted HTTP Host names; required for non-loopback binds |
 | `MCP_HTTP_ALLOWED_ORIGINS` | *(unset)* | Comma-separated browser origins; wildcards are rejected |
@@ -281,8 +283,10 @@ Code-execution variables (`CIVIL3D_SCRIPTS_DIR`, `CIVIL3D_SCRIPT_TIMEOUT_SECONDS
 `CIVIL3D_FOLLOW_VIEW`) are documented in the README.
 
 `CIVIL3D_MCP_LOG_DIR`, `CIVIL3D_MCP_LOG_LEVEL`, code-execution, and plugin filesystem-root
-variables must be set in the environment that launches Civil 3D. The remaining
-connection, MCP, and HTTP variables belong to the Node.js server environment.
+variables must be set in the environment that launches Civil 3D. Host connection discovery
+and HTTP variables belong to the Node.js server environment. The native plugin publishes a
+per-process descriptor under `%LOCALAPPDATA%\Civil3DMcp\connections`; every RPC presents its
+session ID and token. Start the host connection from Civil 3D before connecting.
 
 ### Setting env vars for Claude Desktop
 
@@ -293,8 +297,6 @@ connection, MCP, and HTTP variables belong to the Node.js server environment.
       "command": "node",
       "args": ["C:/path/to/civil3d-mcp-unified/build/index.js"],
       "env": {
-        "CIVIL3D_HOST": "localhost",
-        "CIVIL3D_PORT": "8080",
         "CIVIL3D_ENABLE_TOOL_ALIASES": "true",
         "CIVIL3D_LOG_LEVEL": "debug"
       }
@@ -309,8 +311,8 @@ connection, MCP, and HTTP variables belong to the Node.js server environment.
 
 End-to-end flow once everything is running:
 
-1. **Civil 3D** opens with the plugin loaded — plugin starts RPC server on port `8080`.
-2. **MCP server** (`node build/index.js`) starts — connects to Civil 3D on `localhost:8080`, starts HTTP bridge on `127.0.0.1:3000`.
+1. **Civil 3D** opens with the plugin loaded. The user starts the host connection and chooses an authorization policy in Civil 3D.
+2. **MCP server** (`node build/index.js`) starts and discovers the current-user session descriptor. The HTTP bridge starts only when `MCP_HTTP_ENABLED=true` and a token is configured.
 3. **Claude Desktop** connects to the MCP server via stdio.
 4. You ask Claude to do something in Civil 3D — Claude calls the MCP tool — MCP server forwards to Civil 3D plugin — result returns to Claude.
 
@@ -329,15 +331,10 @@ See [`Dockerfile`](../Dockerfile) and [`docker-compose.yml`](../docker-compose.y
 
 ### Production build
 
-```bash
-docker build -t civil3d-mcp .
-docker run --rm -it \
-  -e CIVIL3D_HOST=host.docker.internal \
-  -e CIVIL3D_PORT=8080 \
-  civil3d-mcp
-```
-
-> **Note:** When running in Docker, Civil 3D must be on the host machine. Use `host.docker.internal` (Docker Desktop) to reach it from inside the container. The plugin listens on loopback (`127.0.0.1`) only, and this fork has not verified that a container can reach it. Running the Node server directly is the tested path. The MCP server still communicates via stdio, so use Docker's `-i` flag or pipe stdio from your MCP client.
+The current native transport uses a per-user Windows named pipe and a descriptor under
+the Windows user's `%LOCALAPPDATA%`. The existing container example does not mount that
+pipe or descriptor, so Docker deployment is not a supported way to connect this version
+to a live Civil 3D host. Run the Node MCP server in the same Windows user session as Civil 3D.
 
 ### Local development with hot-reload
 
@@ -377,7 +374,9 @@ returns HTTP 503 until the bridge, plugin, and host queue are ready.
 
 ### HTTP bridge test
 
-The MCP server also exposes a loopback REST endpoint for local integrations. Test it directly:
+The HTTP bridge is off by default. Enable it with `MCP_HTTP_ENABLED=true` and set a strong
+`MCP_HTTP_TOKEN` in the Node.js server environment. Each request must include
+`Authorization: Bearer <token>` or `X-MCP-Token: <token>`. Then test it directly:
 
 ```bash
 curl -X POST http://127.0.0.1:3000/execute \

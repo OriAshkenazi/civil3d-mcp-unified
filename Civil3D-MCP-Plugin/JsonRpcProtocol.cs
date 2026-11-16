@@ -1,6 +1,6 @@
 // JSON-RPC 2.0 response serialization for the plugin, the domain-code to numeric-code table, and one shared
 // parameter reader (PositiveIntegers, for point numbers).
-// Serves no JSON-RPC method: PluginRuntime.HandleRawRequestAsync and RpcTcpServer use it to write every answer that
+// Serves no JSON-RPC method: PluginRuntime.HandleRawRequestAsync and RpcPipeServer use it to write every answer that
 // goes back to the TypeScript server (src/utils/SocketClient.ts turns errors into Civil3DRpcError). Results are
 // camelCase JSON; errors carry the number in error.code and the CIVIL3D.* domain code in error.data.code
 // (tests/security_boundary.test.ts checks those strings). Pure serialization and parsing: no drawing, no files; also

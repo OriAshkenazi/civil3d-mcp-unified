@@ -1,15 +1,16 @@
 // Where the plugin starts and stops inside Civil 3D, and its command-line commands.
 // Lifecycle: when AutoCAD loads Civil3DMcpPlugin.dll it calls Initialize on the main thread. That
 // captures the main-thread context for CivilExecution, starts CommandLineMonitor and adds the McpRibbon tab, but does
-// NOT open the TCP listener: AI clients can't connect until the user turns the AI connection on with C3DMCPSTART or
+// NOT open the named-pipe listener: AI clients can't connect until the user turns the AI connection on with C3DMCPSTART or
 // the ribbon toggle (or CIVIL3D_MCP_AUTOSTART=true). Turning it on calls PluginRuntime.StartServer, which binds
-// RpcTcpServer to 127.0.0.1:8080 (exclusive, so only one Civil 3D window can have it on); C3DMCPSTOP and plugin
+// a private per-session named pipe; C3DMCPSTOP and plugin
 // unload (Terminate) close it. C3DMCPSTATUS and the ribbon's Details button show the queue state that civil3d_health
 // also reports. Every step is logged to PluginLog (%LOCALAPPDATA%\Civil3DMcpPlugin\plugin.log).
 // Other commands: C3DMCPFOLLOW (ViewFollower on/off), MCPRUN and MCPSCRIPTS (saved .csx scripts, ScriptCommands).
 // No drawing is read or changed here.
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.AutoCAD.EditorInput;
 using App = Autodesk.AutoCAD.ApplicationServices.Application;
 
 [assembly: ExtensionApplication(typeof(Civil3DMcpPlugin.PluginEntry))]
@@ -39,8 +40,8 @@ public sealed class PluginEntry : IExtensionApplication
       if (string.Equals(Environment.GetEnvironmentVariable("CIVIL3D_MCP_AUTOSTART"), "true", StringComparison.OrdinalIgnoreCase))
       {
         PluginRuntime.StartServer();
-        PluginLog.Info("PluginEntry", $"Civil3D MCP plugin loaded; listener auto-started on port {PluginRuntime.Port}. Log file: {PluginLog.LogFilePath}");
-        WriteMessage($"Civil3D MCP plugin loaded; AI connection is ON (port {PluginRuntime.Port}). C3DMCPSTOP turns it off.");
+        PluginLog.Info("PluginEntry", $"Civil3D MCP plugin loaded; named pipe auto-started. Log file: {PluginLog.LogFilePath}");
+        WriteMessage("Civil3D MCP plugin loaded; AI connection is ON (named pipe, inspect policy). C3DMCPSTOP turns it off.");
       }
       else
       {
@@ -79,27 +80,44 @@ public sealed class PluginEntry : IExtensionApplication
   [CommandMethod("C3DMCPSTOP")]
   public void StopCommand() => TurnOff();
 
+  /// <summary>Locally grants the session's access level; Auto permits arbitrary in-process code.</summary>
+  [CommandMethod("C3DMCPAUTHORIZE", CommandFlags.Modal)]
+  public void AuthorizeCommand()
+  {
+    var doc = App.DocumentManager.MdiActiveDocument;
+    if (doc == null || !PluginRuntime.GetStatus().IsRunning) { WriteMessage("Start the AI connection with a drawing open first."); return; }
+    doc.Editor.WriteMessage("\nAuto allows arbitrary in-process code with your Windows user privileges in all drawings in this Civil 3D process. Choose only if you trust the client.");
+    var options = new PromptKeywordOptions("\nChoose AI session policy [Inspect/Edit/Auto]: ");
+    options.Keywords.Add("Inspect"); options.Keywords.Add("Edit"); options.Keywords.Add("Auto");
+    options.AllowNone = false;
+    var answer = doc.Editor.GetKeywords(options);
+    if (answer.Status != PromptStatus.OK) return;
+    var policy = answer.StringResult switch { "Edit" => HostPolicy.Edit, "Auto" => HostPolicy.Auto, _ => HostPolicy.Inspect };
+    HostSessionPolicy.Set(policy);
+    WriteMessage($"Civil3D MCP policy: {policy} (all drawings in this Civil 3D process). C3DMCPREVOKE resets to Inspect.");
+  }
+
+  /// <summary>Immediately revokes editing and trusted-code authorization.</summary>
+  [CommandMethod("C3DMCPREVOKE", CommandFlags.Modal)]
+  public void RevokeCommand() { HostSessionPolicy.Reset(); WriteMessage("Civil3D MCP policy reset to Inspect."); }
+
   /// <summary>C3DMCPSTATUS: shows whether the connection is on and what the host queue is doing.</summary>
   [CommandMethod("C3DMCPSTATUS")]
   public void StatusCommand() => ShowStatus();
 
-  /// <summary>Turns the AI connection on for this session (used by C3DMCPSTART and the ribbon toggle): starts the
-  /// listener on port 8080 and refreshes the ribbon. When the port is taken (usually another Civil 3D window with the
-  /// connection on) it logs the error and tells the user on the command line, or in an alert when no drawing is
-  /// open; it doesn't throw.</summary>
+  /// <summary>Starts the current-user pipe and refreshes the ribbon.</summary>
   internal static void TurnOn()
   {
     try
     {
       PluginRuntime.StartServer();
-      PluginLog.Info("PluginEntry", $"Listener started on port {PluginRuntime.Port}.");
-      WriteMessage($"Civil3D MCP: AI connection is ON (port {PluginRuntime.Port}). Type C3DMCPSTOP or use the ribbon to turn it off.");
+      PluginLog.Info("PluginEntry", "Named pipe listener started.");
+      WriteMessage("Civil3D MCP: AI connection is ON (named pipe). Use C3DMCPAUTHORIZE to set policy and C3DMCPSTOP to turn it off.");
     }
     catch (System.Exception ex)
     {
       PluginLog.Error("PluginEntry", "Starting the listener failed", ex);
-      var message = $"Civil3D MCP could not start on port {PluginRuntime.Port}: {ex.Message}\n" +
-        "Another Civil 3D window may already have the AI connection on; turn it off there first.";
+      var message = $"Civil3D MCP could not start its named pipe: {ex.Message}";
       WriteMessage(message);
       if (App.DocumentManager.MdiActiveDocument == null) App.ShowAlertDialog(message);
     }
@@ -131,8 +149,8 @@ public sealed class PluginEntry : IExtensionApplication
   {
     var status = PluginRuntime.GetStatus();
     var message = status.IsRunning
-      ? $"Civil3D MCP: AI connection is ON (port {PluginRuntime.Port}). Queued: {status.QueueDepth}; working: {(status.OperationInProgress ? status.CurrentOperation ?? "yes" : "idle")}."
-      : "Civil3D MCP: AI connection is OFF. Use C3DMCPSTART or the Civil 3D MCP ribbon tab to turn it on.";
+      ? $"Civil3D MCP: AI connection is ON (named pipe). Policy: {HostSessionPolicy.Current}; revision: {HostSessionPolicy.Revision}. Queued: {status.QueueDepth}; working: {(status.OperationInProgress ? status.CurrentOperation ?? "yes" : "idle")}. Use C3DMCPAUTHORIZE to change policy or C3DMCPREVOKE for Inspect."
+      : $"Civil3D MCP: AI connection is OFF. Policy: {HostSessionPolicy.Current}; revision: {HostSessionPolicy.Revision}. Use C3DMCPSTART to connect, then C3DMCPAUTHORIZE to change policy.";
     WriteMessage(message);
     if (App.DocumentManager.MdiActiveDocument == null) App.ShowAlertDialog(message);
     McpRibbon.Refresh();

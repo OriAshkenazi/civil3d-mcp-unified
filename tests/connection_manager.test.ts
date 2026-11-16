@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as net from "node:net";
+import { mockHostDescriptor } from "./helpers/mockHostDescriptor.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -10,12 +11,14 @@ afterEach(() => {
 });
 
 describe("withApplicationConnection", () => {
-  it("uses a fresh TCP connection for every command in a composite action", async () => {
+  it("uses a fresh authenticated pipe connection for every command in a composite action", async () => {
+    const host = mockHostDescriptor();
     let connectionCount = 0;
     const server = net.createServer((socket) => {
       connectionCount += 1;
       socket.once("data", (data) => {
-        const request = JSON.parse(data.toString()) as { id: string; method: string };
+        const request = JSON.parse(data.toString()) as { id: string; method: string; auth: unknown };
+        expect(request.auth).toEqual({ sessionId: host.descriptor.sessionId, token: host.descriptor.token });
         socket.end(JSON.stringify({
           jsonrpc: "2.0",
           id: request.id,
@@ -26,13 +29,12 @@ describe("withApplicationConnection", () => {
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
+      server.listen(host.pipePath, resolve);
     });
 
     try {
-      const address = server.address() as net.AddressInfo;
-      vi.stubEnv("CIVIL3D_HOST", "127.0.0.1");
-      vi.stubEnv("CIVIL3D_PORT", String(address.port));
+      vi.stubEnv("CIVIL3D_CONNECTION_DIR", host.root);
+      vi.stubEnv("CIVIL3D_INSTANCE_PID", String(process.pid));
       vi.resetModules();
 
       const { withApplicationConnection } = await import("../src/utils/ConnectionManager.js");
@@ -47,6 +49,7 @@ describe("withApplicationConnection", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
+      host.cleanup();
     }
   });
 });

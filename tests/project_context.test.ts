@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as net from "node:net";
+import { mockHostDescriptor } from "./helpers/mockHostDescriptor.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -11,6 +12,7 @@ afterEach(() => {
 
 describe("getProjectContext", () => {
   it("loads drawing, object, and selection context in one native command", async () => {
+    const host = mockHostDescriptor();
     let connectionCount = 0;
     const server = net.createServer((socket) => {
       connectionCount += 1;
@@ -36,13 +38,12 @@ describe("getProjectContext", () => {
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
+      server.listen(host.pipePath, resolve);
     });
 
     try {
-      const address = server.address() as net.AddressInfo;
-      vi.stubEnv("CIVIL3D_HOST", "127.0.0.1");
-      vi.stubEnv("CIVIL3D_PORT", String(address.port));
+      vi.stubEnv("CIVIL3D_CONNECTION_DIR", host.root);
+      vi.stubEnv("CIVIL3D_INSTANCE_PID", String(process.pid));
       vi.resetModules();
 
       const { getProjectContext } = await import("../src/orchestration/ProjectContextService.js");
@@ -58,6 +59,7 @@ describe("getProjectContext", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
+      host.cleanup();
     }
   });
 });

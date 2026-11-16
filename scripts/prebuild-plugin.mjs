@@ -11,6 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { pluginSourceHash, repositoryRoot } from "./plugin-source-hash.mjs";
 
@@ -40,10 +41,20 @@ for (const file of files) {
 
 await rm(target, { recursive: true, force: true });
 await mkdir(target, { recursive: true });
-for (const file of files) await cp(path.join(buildDir, file), path.join(target, file));
+for (const file of files) {
+  if (file.endsWith(".json")) {
+    const text = (await readFile(path.join(buildDir, file), "utf8")).replace(/\r\n/g, "\n");
+    await writeFile(path.join(target, file), text, "utf8");
+  } else {
+    await cp(path.join(buildDir, file), path.join(target, file));
+  }
+}
 await writeFile(path.join(target, "BUILD-INFO.json"), `${JSON.stringify({
   version: packageJson.version,
   sourceHash: await pluginSourceHash(),
+  binaryHashes: Object.fromEntries(await Promise.all(files.map(async (file) => [
+    file, createHash("sha256").update(await readFile(path.join(target, file))).digest("hex"),
+  ]))),
   note: "Built locally against Civil 3D 2027 by npm run plugin:prebuild. Autodesk assemblies are not included.",
 }, null, 2)}\n`);
 await rm(buildDir, { recursive: true, force: true });

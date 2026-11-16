@@ -13,6 +13,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { withApplicationConnection } from "../utils/ConnectionManager.js";
+import { requireHostPolicy, type HostSession } from "../utils/hostSession.js";
 import type { ToolCapability } from "./toolMetadata.js";
 
 type JsonObject = Record<string, unknown>;
@@ -72,6 +73,8 @@ export class ApprovalValidationError extends Error {
 
 /** Returns the active drawing's fingerprint; replaced by a fake in tests. */
 export type DrawingFingerprintProvider = () => Promise<string>;
+/** Native policy provider: injectable for isolated unit tests, live and fail-closed by default. */
+export type HostPolicyProvider = (required: "edit" | "auto") => Promise<HostSession>;
 
 const APPROVAL_TOKEN_TTL_MS = 5 * 60 * 1000;
 const NO_ACTIVE_DRAWING_FINGERPRINT = "no-active-drawing";
@@ -165,6 +168,7 @@ export class ApprovalPolicyService {
   public constructor(
     private readonly drawingFingerprint: DrawingFingerprintProvider = getActiveDrawingFingerprint,
     private readonly now: () => number = () => Date.now(),
+    private readonly hostPolicy: HostPolicyProvider = requireHostPolicy,
   ) {}
 
   /** The drawing fingerprint, or a fixed placeholder when no drawing is open and the action doesn't need one. */
@@ -185,6 +189,17 @@ export class ApprovalPolicyService {
     parameters: JsonObject,
     ttlMs = APPROVAL_TOKEN_TTL_MS,
   ): Promise<ApprovalReceipt> {
+    const hostSession = isAutoOnlyAction(target)
+      ? await this.hostPolicy("auto")
+      : isApprovalRequired(target) ? await this.hostPolicy("edit") : undefined;
+
+    if (hostSession?.policy === "auto") {
+      throw new ApprovalValidationError(
+        "The Civil 3D Auto policy authorizes this action directly. Execute it without requesting an approval token.",
+        "CIVIL3D.INVALID_INPUT",
+      );
+    }
+
     if (!isApprovalRequired(target)) {
       throw new ApprovalValidationError(
         `'${target.toolName}' action '${target.action}' does not require approval. Execute it directly.`,
@@ -221,6 +236,10 @@ export class ApprovalPolicyService {
       return;
     }
 
+    const hostSession = await this.hostPolicy(isAutoOnlyAction(target) ? "auto" : "edit");
+    // Host policy is the authorization boundary. Auto sessions need no per-call integrity token.
+    if (hostSession.policy === "auto") return;
+
     const approvalToken = typeof parameters.approvalToken === "string" ? parameters.approvalToken : undefined;
     if (!approvalToken) {
       throw new ApprovalRequiredError(
@@ -253,6 +272,12 @@ export class ApprovalPolicyService {
       throw new ApprovalValidationError("The active drawing changed after approval. Request approval for the current drawing.");
     }
   }
+}
+
+/** Script execution is reserved to the host's explicit Auto policy. */
+function isAutoOnlyAction(target: ApprovalTarget): boolean {
+  return /^(?:execute|query|command|compile|script_(?:save|run|delete))$/i.test(target.action)
+    || /script|execute_code|run_code|automation/i.test(target.action);
 }
 
 /** The server-wide policy instance (tokens live as long as the server process). */

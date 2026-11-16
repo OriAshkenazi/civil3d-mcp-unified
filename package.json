@@ -1,6 +1,6 @@
 {
   "name": "civil3d-mcp",
-  "version": "2.5.0",
+  "version": "2.5.1-security.1",
   "description": "MCP server for interacting with Autodesk Civil 3D.",
   "main": "build/index.js",
   "type": "module",
@@ -17,6 +17,7 @@
     "start": "node ./build/index.js",
     "test": "vitest run",
     "test:p2-boundaries": "dotnet run --project ./tests/FileBoundaryHarness/FileBoundaryHarness.csproj",
+    "test:host-security": "dotnet run --project ./tests/HostSecurityHarness/HostSecurityHarness.csproj",
     "test:watch": "vitest",
     "test:live-plugin": "npm run build && node ./scripts/verify-live-plugin.mjs",
     "test:live-host": "npm run build && node ./scripts/live-host-smoke.mjs",
@@ -42,7 +43,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/michaelwachter20/civil3d-mcp-unified.git"
+    "url": "git+https://github.com/OriAshkenazi/civil3d-mcp-unified.git"
   },
   "keywords": [],
   "author": "Steven Bouldin",
@@ -52,9 +53,9 @@
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/michaelwachter20/civil3d-mcp-unified/issues"
+    "url": "https://github.com/OriAshkenazi/civil3d-mcp-unified/issues"
   },
-  "homepage": "https://github.com/michaelwachter20/civil3d-mcp-unified#readme",
+  "homepage": "https://github.com/OriAshkenazi/civil3d-mcp-unified#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cheerio": "^1.0.0",

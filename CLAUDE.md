@@ -10,14 +10,14 @@ An MCP server and a Civil 3D plugin that let an AI drive the drawing open in **A
 own PC:
 
 ```
-AI client --stdio (MCP)--> build/index.js (TypeScript, Node.js 22.15+) --JSON-RPC over TCP 127.0.0.1:8080--> Civil3DMcpPlugin.dll (inside Civil 3D) --> AutoCAD / Civil 3D .NET API
+AI client --stdio (MCP)--> build/index.js --authenticated current-user named pipe--> Civil3DMcpPlugin.dll --> AutoCAD / Civil 3D .NET API
 ```
 
 - `src/` is the **MCP server** in TypeScript (ESM, `zod` schemas, `@modelcontextprotocol/sdk`). It validates calls,
   enforces approvals, keeps the knowledge base and the job notes, and sends one JSON-RPC request per TCP connection
-  to the plugin. A local HTTP bridge (`127.0.0.1:3000`) exposes the same tools to HTTP clients. **Nothing in Node.js
+  to the plugin. An opt-in HTTP bridge (`127.0.0.1:3000`) requires a token and exposes the same tools to HTTP clients. **Nothing in Node.js
   touches a drawing.**
-- `Civil3D-MCP-Plugin/` is the **plugin** in C# (`net10.0-windows`, required by AutoCAD 2027). It listens on port 8080
+- `Civil3D-MCP-Plugin/` is the **plugin** in C# (`net10.0-windows`, required by AutoCAD 2027). It publishes an authenticated current-user named pipe
   only after the user turns the AI connection on (`C3DMCPSTART` or the ribbon toggle), runs every request through one
   serialized host queue, and does all drawing reads and writes. It also compiles and runs AI-written C# (Roslyn) and
   saved `.csx` scripts.
@@ -43,9 +43,9 @@ AI client --stdio (MCP)--> build/index.js (TypeScript, Node.js 22.15+) --JSON-RP
 | `src/tools/project-db.sql` | Copy of Project Analyzer's `schema/project-db.sql` (a test checks it) |
 | `src/help/`, `src/tools/helpTool.ts` | `civil3d_help`: search of the Autodesk Offline Help installed with Civil 3D, plus the tutorial video catalog (`autodesk_videos.json`) |
 | `src/standards/` | Framework standards data and service (`civil3d://standards/framework`, standards domain) |
-| `src/utils/` | `SocketClient.ts` / `ConnectionManager.ts` (the TCP client), `logger.ts` (stderr), `requestContext.ts` (request ids, cancellation), `atomicFiles.ts` (locks, backups, atomic writes) |
+| `src/utils/` | `SocketClient.ts` / `ConnectionManager.ts` (the authenticated named-pipe client), `logger.ts` (stderr), `requestContext.ts` (request ids, cancellation), `atomicFiles.ts` (locks, backups, atomic writes) |
 | `Civil3D-MCP-Plugin/PluginEntry.cs`, `McpRibbon.cs` | Plugin load, the `C3DMCP*` / `MCPRUN` / `MCPSCRIPTS` commands, the ribbon tab |
-| `Civil3D-MCP-Plugin/RpcTcpServer.cs`, `PluginRuntime.cs`, `JsonRpcProtocol.cs` | Loopback listener, JSON-RPC parsing and error codes, queue state for health |
+| `Civil3D-MCP-Plugin/RpcTcpServer.cs`, `PluginRuntime.cs`, `JsonRpcProtocol.cs` | Current-user pipe, session authentication/authorization, JSON-RPC parsing and queue state |
 | `Civil3D-MCP-Plugin/CommandDispatcher.cs` | The method name -> handler table (`"listAlignments" => AlignmentCommands.ListAlignmentsAsync()`) |
 | `Civil3D-MCP-Plugin/CivilExecution.cs` | The host gate: `ReadAsync` (main thread, no undo step) and `WriteAsync` (command context, document lock, one transaction) |
 | `Civil3D-MCP-Plugin/*Commands.cs` | The handlers, one class per area (surfaces, pipes, QC, labels, hydrology, ...) |
@@ -103,6 +103,8 @@ the Release workflow stops if the prebuilt plugin doesn't match the source. What
 [ROADMAP.md](ROADMAP.md).
 
 ## Rules
+
+- The plugin owns authority: Inspect is the default; only the local `C3DMCPAUTHORIZE` command grants Edit or Auto. Never add a remotely callable elevation path or a TCP fallback. C# queries require Auto and protect model transactions only, not external side effects. Keep arbitrary C# and commands available in an authorized Auto session.
 
 1. **No job data in the repository.** Code, tests, skills, lessons and docs hold general know-how only. Examples are
    made up ("Elm Street Drainage", "RFI 12", "C-104", "MH-3"); never a real job's name, number, people, folders or

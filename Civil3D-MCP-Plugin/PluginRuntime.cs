@@ -1,7 +1,7 @@
-// The plugin's request runtime, between the TCP listener and the handlers.
+// The plugin's request runtime, between the named-pipe listener and the handlers.
 // Lifecycle: PluginEntry.TurnOn (C3DMCPSTART, the ribbon toggle, CIVIL3D_MCP_AUTOSTART) calls StartServer, which
-// starts RpcTcpServer on 127.0.0.1:8080 and a 30 s timer that logs long calls; TurnOff and plugin unload call
-// StopServer. RpcTcpServer hands each request's text to HandleRawRequestAsync, which checks the JSON-RPC envelope,
+// starts RpcPipeServer on a random current-user pipe and a 30 s timer that logs long calls; TurnOff and plugin unload call
+// StopServer. RpcPipeServer hands each request's text to HandleRawRequestAsync, which checks the JSON-RPC envelope,
 // sets the per-request context (method, id, cancellation, expected drawing) in AsyncLocals, calls
 // CommandDispatcher.DispatchAsync and turns the result or exception into the JSON-RPC answer (JsonRpcProtocol).
 // CivilExecution calls Queue/Start/Cancel/CompleteHostOperation around every host-gate operation; GetStatus is what
@@ -45,18 +45,20 @@ public sealed class JsonRpcDispatchException : Exception
 }
 
 /// <summary>
-/// The plugin's request runtime: starts and stops the loopback JSON-RPC listener (RpcTcpServer on <see cref="Port"/>),
+/// The plugin's request runtime: starts and stops the current-user named-pipe listener,
 /// turns each raw request into a CommandDispatcher call and its JSON-RPC answer, keeps per-request context
 /// (method, request id, cancellation, expected drawing) in AsyncLocals that flow into CivilExecution, counts the host
 /// queue for health, and offers the argument helpers every handler uses (GetRequiredString, GetOptional*, ...).
 /// </summary>
 public static class PluginRuntime
 {
-  /// <summary>The loopback port the listener binds; the TS server's CIVIL3D_PORT default matches it.</summary>
-  public const int Port = 8080;
+
 
   private static readonly object Sync = new();
-  private static RpcTcpServer? _server;
+  private static RpcPipeServer? _server;
+  private static HostSessionDescriptor? _session;
+  private static readonly AsyncLocal<string?> CurrentSessionId = new();
+  private static readonly AsyncLocal<long> CurrentPolicyRevision = new();
   private static readonly AsyncLocal<string?> CurrentRequestOperation = new();
   private static readonly AsyncLocal<string?> CurrentRequestId = new();
   private static readonly AsyncLocal<CancellationToken> CurrentRequestCancellation = new();
@@ -69,8 +71,7 @@ public static class PluginRuntime
   private static long? _currentOperationStartedAtUnixMs;
   private static Timer? _longCallLog;
 
-  /// <summary>Starts the listener (C3DMCPSTART, the ribbon toggle, or CIVIL3D_MCP_AUTOSTART). Throws when the port is
-  /// in use, e.g. by another Civil 3D window; nothing is kept then, so a later start can retry.</summary>
+  /// <summary>Starts the current-user listener and publishes fresh session credentials.</summary>
   public static void StartServer()
   {
     lock (Sync)
@@ -81,9 +82,23 @@ public static class PluginRuntime
       }
 
       // Only keep the server once it is listening, so a failed start (port in use) can be retried.
-      var server = new RpcTcpServer(Port, HandleRawRequestAsync);
-      server.Start();
-      _server = server;
+      var session = new HostSessionDescriptor();
+      var server = new RpcPipeServer(session.PipeName, HandleRawRequestAsync);
+      try
+      {
+        HostSessionPolicy.Reset();
+        server.Start();
+        _session = session;
+        session.Publish();
+        _server = server;
+      }
+      catch
+      {
+        _session = null;
+        server.Stop();
+        try { session.Remove(); } catch { }
+        throw;
+      }
       _longCallLog = new Timer(_ => LogLongCall(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     }
   }
@@ -95,6 +110,10 @@ public static class PluginRuntime
     {
       _server?.Stop();
       _server = null;
+      HostSessionPolicy.Reset();
+      var session = _session;
+      _session = null;
+      try { session?.Remove(); } catch (Exception ex) { PluginLog.Error("Session", "Could not remove descriptor.", ex); }
       _longCallLog?.Dispose();
       _longCallLog = null;
       _currentOperation = null;
@@ -146,6 +165,11 @@ public static class PluginRuntime
     }
 
     var id = request["id"]?.DeepClone();
+    HostSessionDescriptor? session;
+    lock (Sync) session = _session;
+    if (session == null || !session.Authenticate(request["auth"]))
+      return JsonRpcProtocol.SerializeError(id, JsonRpcProtocol.NumericErrorCode("CIVIL3D.AUTH_REQUIRED"), "CIVIL3D.AUTH_REQUIRED", "Valid session credentials are required.");
+
     if (request["jsonrpc"] is not JsonValue versionValue
       || !versionValue.TryGetValue<string>(out var version)
       || version != "2.0")
@@ -169,6 +193,10 @@ public static class PluginRuntime
     }
     var parameters = request["params"] as JsonObject;
 
+    var previousSession = CurrentSessionId.Value;
+    var previousRevision = CurrentPolicyRevision.Value;
+    CurrentSessionId.Value = session.SessionId;
+    CurrentPolicyRevision.Value = HostSessionPolicy.Revision;
     var previousOperation = CurrentRequestOperation.Value;
     var previousRequestId = CurrentRequestId.Value;
     var previousCancellation = CurrentRequestCancellation.Value;
@@ -179,11 +207,16 @@ public static class PluginRuntime
     var timer = System.Diagnostics.Stopwatch.StartNew();
     try
     {
+      EnsureAuthorized(method);
       // At Info, so that after a crash the log's last line says what was running.
       PluginLog.Info("Dispatch", $"-> {method} [{CurrentRequestId.Value ?? "no-id"}]");
-      var result = await CommandDispatcher.DispatchAsync(method, parameters, cancellationToken);
+      var result = await HostSessionRequestGate.ExecuteAsync(session, request["auth"], method, () => CommandDispatcher.DispatchAsync(method, parameters, cancellationToken));
       PluginLog.Debug("Dispatch", $"<- {method} [{CurrentRequestId.Value ?? "no-id"}] ok durationMs={timer.ElapsedMilliseconds}");
       return JsonRpcProtocol.SerializeResult(id, result);
+    }
+    catch (HostSessionGateException ex)
+    {
+      return JsonRpcProtocol.SerializeError(id, JsonRpcProtocol.NumericErrorCode(ex.Code), ex.Code, ex.Message);
     }
     catch (JsonRpcDispatchException ex)
     {
@@ -216,6 +249,8 @@ public static class PluginRuntime
     }
     finally
     {
+      CurrentSessionId.Value = previousSession;
+      CurrentPolicyRevision.Value = previousRevision;
       CurrentRequestOperation.Value = previousOperation;
       CurrentRequestId.Value = previousRequestId;
       CurrentRequestCancellation.Value = previousCancellation;
@@ -240,6 +275,30 @@ public static class PluginRuntime
     var inCivil3D = stack.IndexOf("at Autodesk.", StringComparison.Ordinal);
     var inPlugin = stack.IndexOf("at Civil3DMcpPlugin.", StringComparison.Ordinal);
     return inCivil3D >= 0 && (inPlugin < 0 || inCivil3D < inPlugin);
+  }
+
+  internal static object GetHostSession() => new { policy = HostSessionPolicy.Current.ToString().ToLowerInvariant(), sessionId = CurrentSessionId.Value, revision = HostSessionPolicy.Revision, scope = "all drawings in this Civil 3D process" };
+
+  internal static void EnsureAuthorized(string method)
+  {
+    if (!HostSessionPolicy.IsKnown(method))
+      throw new JsonRpcDispatchException("CIVIL3D.METHOD_NOT_FOUND", "Unknown plugin method.");
+    lock (Sync)
+    {
+      if (_session == null || CurrentSessionId.Value != _session.SessionId || !HostSessionPolicy.AllowsAtRevision(method, CurrentPolicyRevision.Value))
+        throw new JsonRpcDispatchException("CIVIL3D.FORBIDDEN", "The host session policy does not authorize this operation. Use C3DMCPAUTHORIZE locally.");
+    }
+  }
+
+  internal static bool IsTrustedRemoteRequest()
+  {
+    lock (Sync) return CurrentSessionId.Value != null && _session?.SessionId == CurrentSessionId.Value
+      && CurrentPolicyRevision.Value == HostSessionPolicy.Revision && HostSessionPolicy.Current == HostPolicy.Auto;
+  }
+
+  internal static void RecheckHostAuthorization()
+  {
+    if (CurrentSessionId.Value != null) EnsureAuthorized(GetCurrentRequestOperation());
   }
 
   /// <summary>The current request's cancellation token (cancelled when the client disconnects); default outside a

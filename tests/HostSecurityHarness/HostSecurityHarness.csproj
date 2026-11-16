@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Civil3D-MCP-Plugin\HostSessionPolicy.cs" Link="HostSessionPolicy.cs" />
+    <Compile Include="..\..\Civil3D-MCP-Plugin\HostSessionDescriptor.cs" Link="HostSessionDescriptor.cs" />
+    <Compile Include="..\..\Civil3D-MCP-Plugin\HostSessionRequestGate.cs" Link="HostSessionRequestGate.cs" />
+  </ItemGroup>
+</Project>

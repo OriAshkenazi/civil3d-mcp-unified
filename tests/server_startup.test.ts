@@ -2,7 +2,10 @@
 // MCP client sees typed tools, output schemas, annotations, resources and progress; protected actions are blocked
 // without approval before reaching the plugin. In-memory transport; no plugin connection is needed and no Civil 3D.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("../src/utils/hostSession.js", () => ({
+  requireHostPolicy: async () => ({ policy: "edit", sessionId: "test-session", scope: "test" }),
+}));
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
