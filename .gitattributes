@@ -1,2 +1,4 @@
 # Binary test fixtures (SQLite databases): never convert line endings.
 *.db binary
+# Payload JSON participates in SHA-256 verification; checkout must preserve its bytes.
+prebuilt/Civil3DMcpPlugin/*.json text eol=lf
